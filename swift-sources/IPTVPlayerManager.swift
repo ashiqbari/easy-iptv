@@ -818,7 +818,7 @@ public final class IPTVPlayerManager: ObservableObject {
     /// Schedules auto-hide of controls after 4 seconds of inactivity.
     public func scheduleControlsAutoHide() {
         controlsTimer?.cancel()
-        controlsTimer = Task { [weak self] in
+        controlsTimer = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             if !Task.isCancelled {
                 withAnimation {
@@ -866,7 +866,7 @@ public final class IPTVPlayerManager: ObservableObject {
         
         // Observe status (readyToPlay, failed, unknown)
         playerItemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self = self else { return }
                 switch item.status {
                 case .readyToPlay:
@@ -887,7 +887,7 @@ public final class IPTVPlayerManager: ObservableObject {
         // Observe timeControlStatus (playing, paused, waitingToPlayAtSpecifiedRate)
         if let player = self.player {
             playerTimeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] pl, _ in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     guard let self = self else { return }
                     self.isPlaying = pl.timeControlStatus == .playing
                     self.isBuffering = pl.timeControlStatus == .waitingToPlayAtSpecifiedRate
