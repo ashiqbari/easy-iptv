@@ -1,0 +1,6 @@
+{
+  "name": "SwiftUI IPTV Player (iOS & macOS)",
+  "description": "Native cross-platform IPTV Player for iOS 16+ and macOS 13+ built with Swift, SwiftUI, AVKit, and NavigationSplitView.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
