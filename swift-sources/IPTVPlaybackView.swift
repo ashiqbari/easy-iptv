@@ -2,12 +2,15 @@
 //  IPTVPlaybackView.swift
 //  IPTVPlayer
 //
-//  Created for iOS 16+ and macOS 13+
+//  Created for iOS 16+ and macOS 15+
 //
 
 import SwiftUI
 import AVFoundation
 import QuartzCore
+#if os(macOS)
+import VLC
+#endif
 
 /// High-performance video player view wrapping hardware-accelerated AVPlayerLayer
 /// with custom HUD overlays, buffering indicators, error states, and responsive controls for iOS and macOS.
@@ -27,7 +30,65 @@ public struct IPTVPlaybackView: View {
             if manager.currentChannel?.contentType == .series && manager.isViewingSeriesDetails {
                 // TV Series Overview & Seasons/Episodes Hero Page (Screenshot 3 Reference UI)
                 seriesHeroView
-            } else if let player = manager.player {
+            } else {
+#if os(macOS)
+                if manager.useVLCPlayback {
+                    if let player = manager.vlcPlayer {
+                        VLCVideoSurface(player: player)
+                            .ignoresSafeArea()
+                            .overlay {
+                                Color.clear
+                                    .contentShape(Rectangle())
+                                    .onTapGesture(count: 2) { manager.toggleFullscreen() }
+                                    .onTapGesture(count: 1) { manager.toggleVideoControls() }
+                            }
+                        if manager.isBuffering { bufferingOverlay }
+                        if let errorMsg = manager.errorMessage { errorOverlay(message: errorMsg) }
+                        if manager.showVideoControls { controlsOverlay }
+                        if manager.showingEpisodesDrawer && manager.currentChannel?.contentType == .series && !manager.seriesEpisodes.isEmpty {
+                            episodesDrawerOverlay
+                        }
+                    } else {
+                        bufferingOverlay
+                    }
+                } else {
+                    avPlaybackContent
+                }
+#else
+                avPlaybackContent
+#endif
+            }
+        }
+        .sheet(isPresented: $manager.showingEPGSheet) {
+            if let channel = manager.currentChannel {
+                NativeEPGSheetView(channel: channel, manager: manager)
+            }
+        }
+        .onAppear {
+            manager.scheduleControlsAutoHide()
+        }
+        // macOS keyboard shortcuts (macOS 15+)
+        #if os(macOS)
+        .background {
+            HStack(spacing: 0) {
+                Button("") { manager.togglePlayPause() }
+                    .keyboardShortcut(.space, modifiers: [])
+                Button("") { manager.toggleFullscreen() }
+                    .keyboardShortcut("f", modifiers: [])
+                Button("") { manager.seekBy(seconds: -10) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                Button("") { manager.seekBy(seconds: 10) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+            }
+            .opacity(0)
+            .allowsHitTesting(false)
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var avPlaybackContent: some View {
+        if let player = manager.player {
                 // Direct AVPlayerLayer rendering via explicit platform representable
                 AVPlayerLayerRepresentable(player: player, videoGravity: manager.videoGravity)
                     .ignoresSafeArea()
@@ -63,35 +124,9 @@ public struct IPTVPlaybackView: View {
                     episodesDrawerOverlay
                         .transition(.move(edge: .trailing))
                 }
-            } else {
-                emptyPlaceholderView
-            }
+        } else {
+            emptyPlaceholderView
         }
-        .sheet(isPresented: $manager.showingEPGSheet) {
-            if let channel = manager.currentChannel {
-                NativeEPGSheetView(channel: channel, manager: manager)
-            }
-        }
-        .onAppear {
-            manager.scheduleControlsAutoHide()
-        }
-        // macOS keyboard shortcuts (compatible with macOS 13+ and macOS 14+)
-        #if os(macOS)
-        .background {
-            HStack(spacing: 0) {
-                Button("") { manager.togglePlayPause() }
-                    .keyboardShortcut(.space, modifiers: [])
-                Button("") { manager.toggleFullscreen() }
-                    .keyboardShortcut("f", modifiers: [])
-                Button("") { manager.seekBy(seconds: -10) }
-                    .keyboardShortcut(.leftArrow, modifiers: [])
-                Button("") { manager.seekBy(seconds: 10) }
-                    .keyboardShortcut(.rightArrow, modifiers: [])
-            }
-            .opacity(0)
-            .allowsHitTesting(false)
-        }
-        #endif
     }
     
     // MARK: - Subviews
@@ -236,24 +271,22 @@ public struct IPTVPlaybackView: View {
                     .help("Live TV Electronic Program Schedule (EPG)")
                 }
                 
-                // Stream Playback Engine & Format Menu
+                // Playback engine selector
+#if os(macOS)
                 Menu {
-                    ForEach(StreamFormatOverride.allCases, id: \.self) { fmt in
-                        Button {
-                            manager.applyFormatOverride(fmt)
-                        } label: {
-                            HStack {
-                                Text(fmt.title)
-                                if manager.formatOverride == fmt {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
+                    Button {
+                        if manager.useVLCPlayback, let channel = manager.currentChannel {
+                            manager.playDirectStream(channel)
+                        } else {
+                            manager.playCurrentStreamWithVLC()
                         }
+                    } label: {
+                        Label(manager.useVLCPlayback ? "Use AVKit" : "Play with VLC", systemImage: "play.rectangle")
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: "slider.horizontal.3")
-                        Text("Format")
+                        Image(systemName: "play.rectangle")
+                        Text("Player")
                     }
                     .font(.caption)
                     .foregroundColor(.white)
@@ -263,7 +296,8 @@ public struct IPTVPlaybackView: View {
                     .cornerRadius(6)
                 }
                 .menuStyle(.borderlessButton)
-                .help("Select video container format (.mp4, .mkv, .ts, .m3u8)")
+                .help("Switch between AVKit and the VLC playback engine")
+#endif
                 
                 // Favorite Toggle
                 Button {
@@ -516,43 +550,27 @@ public struct IPTVPlaybackView: View {
                 .multilineTextAlignment(.center)
                 .foregroundColor(.white.opacity(0.85))
                 .frame(maxWidth: 340)
-            
-            // Format troubleshooting buttons
-            VStack(spacing: 6) {
-                Text("SWITCH PLAYBACK FORMAT")
-                    .font(.caption2.bold())
-                    .foregroundColor(.gray)
-                
-                HStack(spacing: 8) {
-                    Button("Try MP4") {
-                        manager.applyFormatOverride(.mp4)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.purple)
-                    .controlSize(.small)
-                    
-                    Button("Try MKV") {
-                        manager.applyFormatOverride(.mkv)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.indigo)
-                    .controlSize(.small)
-                    
-                    Button("Try HLS") {
-                        manager.applyFormatOverride(.hls)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.blue)
-                    .controlSize(.small)
-                }
+
+            #if os(macOS)
+            Button {
+                manager.playCurrentStreamWithVLC()
+            } label: {
+                Label("Try playback with VLC", systemImage: "play.rectangle.fill")
+                    .font(.footnote.bold())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.orange.opacity(0.85))
+                    .cornerRadius(8)
             }
-            .padding(.top, 4)
+            .buttonStyle(.plain)
+            #endif
             
-            if manager.currentChannel != nil {
+            if let channel = manager.currentChannel {
                 Button {
-                    manager.applyFormatOverride(.auto)
+                    manager.playDirectStream(channel)
                 } label: {
-                    Label("Retry Direct Stream", systemImage: "arrow.clockwise")
+                    Label("Retry with AVKit", systemImage: "arrow.clockwise")
                         .font(.footnote.bold())
                         .foregroundColor(.black)
                         .padding(.horizontal, 16)
@@ -923,7 +941,7 @@ public struct IPTVPlaybackView: View {
                                         .padding(.horizontal, 32)
                                         .padding(.bottom, 20)
                                     }
-                                    .onChange(of: manager.episodeScrollIndex) { newIdx in
+                                    .onChange(of: manager.episodeScrollIndex) { _, newIdx in
                                         withAnimation(.easeInOut(duration: 0.3)) {
                                             scrollProxy.scrollTo(newIdx, anchor: .leading)
                                         }
@@ -1363,6 +1381,35 @@ public struct AVPlayerLayerRepresentable: NSViewRepresentable {
         nsView.update(player: player, videoGravity: videoGravity)
     }
 }
+
+/// AppKit surface that attaches a VLCMediaPlayer to a native view.
+private struct VLCVideoSurface: NSViewRepresentable {
+    let player: VLCMediaPlayer
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.black.cgColor
+        attach(player, to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        attach(player, to: nsView)
+    }
+
+    private func attach(_ player: VLCMediaPlayer, to view: NSView) {
+        guard (player.drawable as? NSView) !== view else { return }
+        player.drawable = view
+        if !player.isPlaying && !player.willPlay {
+            player.play()
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
+        // The manager owns and stops the VLC player when changing playback engines.
+    }
+}
 #elseif os(iOS)
 import UIKit
 
@@ -1416,4 +1463,3 @@ public struct AVPlayerLayerRepresentable: UIViewRepresentable {
     }
 }
 #endif
-

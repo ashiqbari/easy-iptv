@@ -189,7 +189,7 @@ export default function App() {
                 <span>EasyIPTV</span>
               </h1>
               <span className="hidden sm:inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                iOS 16+ & macOS 13+
+                iOS 16+ & macOS 15+
               </span>
             </div>
             <p className="text-[11px] text-neutral-400 hidden md:block">
@@ -352,4 +352,3 @@ export default function App() {
     </div>
   );
 }
-

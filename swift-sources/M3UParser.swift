@@ -2,7 +2,7 @@
 //  M3UParser.swift
 //  IPTVPlayer
 //
-//  Created for iOS 16+ and macOS 13+
+//  Created for iOS 16+ and macOS 15+
 //
 
 import Foundation

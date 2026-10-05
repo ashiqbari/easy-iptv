@@ -1,21 +1,28 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
     name: "EasyIPTV",
     platforms: [
-        .macOS(.v13),
+        .macOS(.v15),
         .iOS(.v16)
     ],
     products: [
         .executable(name: "EasyIPTV", targets: ["EasyIPTV"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/dooop/swift-vlc", exact: "0.5.0")
+    ],
     targets: [
         .executableTarget(
             name: "EasyIPTV",
+            dependencies: [
+                .product(name: "VLC", package: "swift-vlc", condition: .when(platforms: [.macOS]))
+            ],
             path: ".",
             exclude: [
                 "Info.plist",
+                "LICENSE-LGPL-2.1",
                 "build_dmg.sh",
                 "run_app.command",
                 "AppIcon.png",
@@ -38,5 +45,6 @@ let package = Package(
                 .linkedFramework("IOKit", .when(platforms: [.macOS]))
             ]
         )
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )

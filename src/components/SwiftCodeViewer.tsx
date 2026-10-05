@@ -61,16 +61,16 @@ export const SwiftCodeViewer: React.FC = () => {
 
       folder?.file(
         'README.md',
-        `# EasyIPTV — Native SwiftUI Player for macOS 13+ & iOS 16+
+        `# EasyIPTV — Native SwiftUI Player for macOS 15+ & iOS 16+
 
-Built with Swift, SwiftUI, AVFoundation, and Swift Concurrency.
+Built with Swift, SwiftUI, AVFoundation, VLCKit, and Swift Concurrency. macOS 15+ uses VLC as a fallback when AVKit cannot decode a stream; iOS remains on AVKit.
 Supports Live TV, Movies (VOD), and TV Shows (Series) with Xtream Codes and M3U/M3U8 playlists.
 
 ---
 
 ## ⚡ Method 1: Instant Clean Build & Run (Terminal / SwiftPM)
 
-1. Open your terminal in this extracted folder.
+1. Open your terminal in this extracted folder with Xcode 26+ installed.
 2. Remove any old cache and run directly:
    \`\`\`bash
    rm -rf .build && swift run
@@ -135,7 +135,7 @@ Because this project includes a standard \`Package.swift\`, you can open it dire
             <h2 className="text-sm font-semibold text-white flex items-center gap-2">
               Swift Source Files & Xcode Architecture
               <span className="hidden sm:inline-block text-[10px] font-mono uppercase bg-neutral-800 text-neutral-400 px-2 py-0.5 rounded border border-neutral-700">
-                macOS 13+ • iOS 16+
+                macOS 15+ • iOS 16+
               </span>
             </h2>
             <p className="text-xs text-neutral-400 hidden sm:block">
@@ -224,7 +224,7 @@ Because this project includes a standard \`Package.swift\`, you can open it dire
           {/* Quick Info Footer */}
           <div className="p-3 border-t border-neutral-800 text-xs text-neutral-400 flex items-center gap-2 bg-neutral-900/40">
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-            <span>Ready for Xcode 15/16 & CLI compilation</span>
+            <span>Ready for Xcode 26 & SwiftPM compilation</span>
           </div>
         </aside>
 
@@ -370,7 +370,7 @@ Because this project includes a standard \`Package.swift\`, you can open it dire
                     </span>
                   </div>
                   <span className="text-[10px] font-mono bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded border border-blue-500/30">
-                    Xcode 15 / 16
+                    Xcode 26+
                   </span>
                 </div>
 

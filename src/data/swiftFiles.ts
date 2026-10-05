@@ -57,10 +57,10 @@ export const SWIFT_FILES: SwiftFileInfo[] = [
     filename: 'IPTVPlayerManager.swift',
     title: 'Central State Coordinator & Player Manager',
     category: 'State',
-    description: 'Main coordinator handling playlist management, fast indexed filtering, favorites persistence, MP4 VOD timeline tracking, and AVPlayer lifecycle.',
+    description: 'Main coordinator handling playlist management, favorites, AVPlayer playback, the macOS VLC fallback, and playback lifecycle.',
     highlights: [
       'Precomputed category counts and filtered channel indices for 0ms UI lag',
-      'Hardware-accelerated AVPlayer with VLC/Browser User-Agent header bypass',
+      'AVPlayer by default, with an in-app VLC playback engine on macOS',
       'Dynamic buffer tuning: Progressive buffering for MP4, low-latency for Live TV',
       'VOD seeking (seek to second, skip ±10s) and periodic CMTime tracking',
       'Native full screen and detailOnly column visibility toggle'
@@ -69,9 +69,9 @@ export const SWIFT_FILES: SwiftFileInfo[] = [
   },
   {
     filename: 'IPTVPlaybackView.swift',
-    title: 'Hardware AVPlayerLayer Video View',
+    title: 'AVPlayer and VLC Video View',
     category: 'View',
-    description: 'Hardware-accelerated AVPlayerLayer view wrapping Metal/CoreAnimation with interactive HUD overlays, VOD progress scrubber, buffering indicators, and full screen controls.',
+    description: 'Native AVPlayerLayer view plus the VLC fallback view, with playback HUD, VOD timeline, buffering indicators, and full screen controls.',
     highlights: [
       'Direct AVPlayerLayer via AppKit NSViewRepresentable / UIKit UIViewRepresentable',
       'VOD Scrubber Slider with formatted current time and duration',
@@ -127,7 +127,7 @@ export const SWIFT_FILES: SwiftFileInfo[] = [
     highlights: [
       'NSAllowsArbitraryLoads: true for non-HTTPS IPTV streams',
       'UIBackgroundModes audio capability',
-      'LSMinimumSystemVersion 13.0+ for macOS Ventura / Sonoma'
+      'LSMinimumSystemVersion 15.0+ for macOS Sequoia and newer'
     ],
     code: infoPlistCode
   },
@@ -135,10 +135,11 @@ export const SWIFT_FILES: SwiftFileInfo[] = [
     filename: 'Package.swift',
     title: 'Swift Package Manager Manifest',
     category: 'Build',
-    description: 'SPM manifest enabling pure command-line compilation and execution on macOS without requiring full Xcode.',
+    description: 'SPM manifest linking the VLC Swift package for macOS playback. Building the native target requires Xcode 26+.',
     highlights: [
-      'Zero external dependencies (pure AVFoundation, SwiftUI, and Combine)',
-      'Configured for macOS 13+ and iOS 16+',
+      'VLCKit playback dependency enabled for macOS only',
+      'Configured for macOS 15+ and iOS 16+',
+      'Swift tools 6.0 and VLC package 0.5.0',
       'Executable target running directly via swift run'
     ],
     code: packageSwiftCode

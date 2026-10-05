@@ -2,7 +2,7 @@
 //  IPTVPlayerApp.swift
 //  IPTVPlayer
 //
-//  Created for iOS 16+ and macOS 13+
+//  Created for iOS 16+ and macOS 15+
 //
 
 import SwiftUI
@@ -14,21 +14,6 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var manager: IPTVPlayerManager?
-    
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        // Observe window close notifications so all playback immediately ceases
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleWindowWillClose(_:)),
-            name: NSWindow.willCloseNotification,
-            object: nil
-        )
-    }
-    
-    @objc private func handleWindowWillClose(_ notification: Notification) {
-        // Immediately halt player and audio output so nothing keeps playing in background
-        manager?.stop()
-    }
     
     /// When the user closes the main window (e.g. clicking the red 'x' button),
     /// terminate the app cleanly instead of leaving a headless background process playing audio.

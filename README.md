@@ -1,11 +1,11 @@
 # EasyIPTV 📺
 
-[![Platform](https://img.shields.io/badge/Platform-macOS%2013%2B%20%7C%20iOS%2016%2B-blue.svg)](https://apple.com)
-[![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange.svg)](https://swift.org)
+[![Platform](https://img.shields.io/badge/Platform-macOS%2015%2B%20%7C%20iOS%2016%2B-blue.svg)](https://apple.com)
+[![Swift](https://img.shields.io/badge/Swift-6.0%2B-orange.svg)](https://swift.org)
 [![Build & Release](https://github.com/easyiptv/easyiptv/actions/workflows/release.yml/badge.svg)](../../actions/workflows/release.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-**EasyIPTV** is a modern, high-performance, native macOS IPTV application and web simulator. Built with **SwiftUI**, **AVKit**, and **IOKit**, it delivers smooth, hardware-accelerated streaming for **Live TV**, **VOD Movies**, and **Multi-Season TV Series** using **Xtream Codes** accounts or **M3U / M3U Plus** playlists.
+**EasyIPTV** is a modern, native macOS IPTV application and web simulator. Built with **SwiftUI**, **AVKit**, **VLCKit**, and **IOKit**, it plays **Live TV**, **VOD Movies**, and **TV Series** from **Xtream Codes** accounts or **M3U / M3U Plus** playlists. macOS playback can switch to VLC when AVKit cannot decode a stream.
 
 ---
 
@@ -24,7 +24,8 @@
   - **No Display Sleep / Screen Lock While Watching**: Employs native I/O Kit power management assertions (`kIOPMAssertionTypePreventUserIdleDisplaySleep`) and `ProcessInfo` activity tracking so your Mac will never dim, sleep, or lock itself during active video playback.
   - **Clean Termination on Close**: Closing the main window (`x` button) stops all background network and audio streaming, terminating the process cleanly and allowing instant re-launch from the Dock or Finder.
 - **⚡ Advanced Stream Engine**:
-  - Real-time format override selector (Auto, MP4, MKV, HLS `.m3u8`, direct MPEG-TS) to resolve container format issues on unsupported or transcoded streams.
+  - AVKit playback with an in-app VLC fallback for broader codec and container support on macOS.
+  - Stream extension retry controls for Xtream providers that expose alternate formats.
   - Dual Xtream Codes and M3U playlist parser with category filtering and persistent favorites.
 - **💻 Web Simulator Companion**:
   - Includes a React + TypeScript companion app replicating the macOS native experience directly in web browsers.
@@ -45,8 +46,8 @@ Download the latest prebuilt macOS installer directly from [**GitHub Releases**]
 ## 🛠️ Building Locally on macOS
 
 ### Prerequisites
-- macOS 13.0 (Ventura) or newer
-- Xcode 15+ or Xcode Command Line Tools (`xcode-select --install`)
+- macOS 15.0 (Sequoia) or newer
+- Xcode 16+ with Swift 6.0
 
 ### 1. Build and Run Directly
 Navigate to the `swift-sources` directory:
@@ -54,11 +55,7 @@ Navigate to the `swift-sources` directory:
 cd swift-sources
 ./run_app.command
 ```
-Or run with the Swift Package Manager CLI:
-```bash
-cd swift-sources
-swift run -c release
-```
+`run_app.command` builds the app and embeds VLCKit before launching it locally.
 
 ### 2. Package a Standalone `.dmg` Installer
 To produce a signed, drag-and-drop `.dmg` disk image on your local machine:
@@ -83,8 +80,8 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 The GitHub Action will automatically:
-1. Spin up a `macos-14` (Apple Silicon) runner.
-2. Compile the native SwiftUI + AVKit binary using SwiftPM and `swiftc`.
+1. Spin up a `macos-26` (Apple Silicon) runner.
+2. Compile the native SwiftUI + AVKit/VLC binary using SwiftPM.
 3. Assemble the `EasyIPTV.app` bundle with high-resolution icons (`AppIcon.icns`).
 4. Generate `EasyIPTV-macOS.dmg` with a drag-and-drop link to `/Applications`.
 5. Compute the SHA256 checksum.
@@ -135,3 +132,5 @@ The GitHub Action will automatically:
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+The macOS VLC playback dependency is licensed under LGPL 2.1; its license is included at [swift-sources/LICENSE-LGPL-2.1](swift-sources/LICENSE-LGPL-2.1) and copied into the app bundle.

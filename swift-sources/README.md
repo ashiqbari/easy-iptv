@@ -1,17 +1,18 @@
 # EasyIPTV - macOS Native Source
 
-This directory contains the complete native **SwiftUI** + **AVKit** application for macOS (13.0+) and iOS (16.0+).
+This directory contains the native **SwiftUI** IPTV application for macOS (15.0+) and iOS (16.0+). macOS uses AVKit with an in-app VLC playback fallback; VLC playback is macOS-only.
+
+The VLC Swift package and VLCKit are distributed under LGPL 2.1. The corresponding license is included in the app bundle resources as `LICENSE-LGPL-2.1.txt`.
 
 ## 🚀 Quick Run on macOS
+
+Building the native macOS target requires Xcode 16 or newer with Swift 6.0. SwiftPM downloads VLCKit and embeds it in the app.
 
 Double-click `run_app.command` or run:
 ```bash
 ./run_app.command
 ```
-or compile with the Swift CLI:
-```bash
-swift run -c release
-```
+The run script embeds VLCKit beside the executable before launching, so the VLC fallback works outside the app bundle too.
 
 ---
 
@@ -24,9 +25,9 @@ chmod +x build_dmg.sh
 ```
 
 The script will:
-1. Compile the native binary using `Package.swift` / `swiftc`.
+1. Resolve the SwiftPM VLC dependency and compile the native binary.
 2. Generate the macOS `.icns` iconset from `AppIcon.png`.
-3. Assemble the `EasyIPTV.app` bundle and apply an ad-hoc code signature.
+3. Embed `VLCKit.framework`, assemble the `EasyIPTV.app` bundle, and apply an ad-hoc code signature.
 4. Create the final compressed `.dmg` disk image using native macOS `hdiutil` with a drag-and-drop shortcut to `/Applications`.
 
 ---

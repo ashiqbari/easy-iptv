@@ -2,10 +2,13 @@
 //  ContentView.swift
 //  IPTVPlayer
 //
-//  Created for iOS 16+ and macOS 13+
+//  Created for iOS 16+ and macOS 15+
 //
 
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// Main cross-platform container coordinating sidebar categories, channel list, and video player
 /// using modern three-column `NavigationSplitView`.
@@ -21,28 +24,22 @@ public struct ContentView: View {
     
     public var body: some View {
         Group {
-            if !manager.isFullscreen {
-                NavigationSplitView(columnVisibility: $manager.columnVisibility) {
-                    // COLUMN 1: Categories Sidebar
-                    sidebarView
-                        .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
-                } content: {
-                    // COLUMN 2: Filtered Channel List
-                    ChannelListView(manager: manager)
-                        .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 620)
-                } detail: {
-                    // COLUMN 3: Active Video Player
-                    IPTVPlaybackView(manager: manager)
-                }
-                .navigationSplitViewStyle(.balanced)
+#if os(macOS)
+            if manager.isFullscreen {
+                fullscreenPlaybackView
             } else {
-                // TRUE BORDERLESS FULLSCREEN VIEW:
-                // Completely replaces window split hierarchy so no window toolbar or top bar is visible
+                navigationSplitView
+            }
+#else
+            if !manager.isFullscreen {
+                navigationSplitView
+            } else {
                 IPTVPlaybackView(manager: manager)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color.black)
                     .ignoresSafeArea()
             }
+#endif
         }
         .sheet(isPresented: $manager.showingPlaylistSheet) {
             playlistInputSheet
@@ -51,10 +48,34 @@ public struct ContentView: View {
             aboutSheet
         }
         #if os(macOS)
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { _ in
-            manager.stop()
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
+            manager.updateFullscreenState(true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
+            manager.updateFullscreenState(false)
         }
         #endif
+    }
+
+    private var navigationSplitView: some View {
+        NavigationSplitView(columnVisibility: $manager.columnVisibility) {
+            sidebarView
+                .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
+        } content: {
+            ChannelListView(manager: manager)
+                .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 620)
+        } detail: {
+            IPTVPlaybackView(manager: manager)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .navigationSplitViewStyle(.balanced)
+    }
+
+    private var fullscreenPlaybackView: some View {
+        IPTVPlaybackView(manager: manager)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black)
+            .ignoresSafeArea()
     }
     
     // MARK: - Column 1: Sidebar
@@ -172,7 +193,7 @@ public struct ContentView: View {
                 Text("SwiftUI IPTV Player")
                     .font(.title2.bold())
                 
-                Text("Native cross-platform IPTV client for iOS 16+ and macOS 13+ built with Swift Concurrency, AVFoundation, and NavigationSplitView.")
+                Text("Native IPTV client for iOS 16+ and macOS 15+ built with Swift Concurrency, AVFoundation, and NavigationSplitView. macOS also includes the VLC playback engine.")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)

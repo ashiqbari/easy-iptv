@@ -1,0 +1,15 @@
+{
+  "originHash" : "3847633cb5b6a2f1d74572e8bfd58212fe34a638a1fa8a7df432c804a069b094",
+  "pins" : [
+    {
+      "identity" : "swift-vlc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/dooop/swift-vlc",
+      "state" : {
+        "revision" : "d1eca1c56a851b18a4cc959857c7afcf7666dc6d",
+        "version" : "0.5.0"
+      }
+    }
+  ],
+  "version" : 3
+}

@@ -18,7 +18,7 @@ export const ArchitectureGuide: React.FC = () => {
             Native Cross-Platform IPTV Player Architecture
           </h1>
           <p className="mt-2 text-sm md:text-base text-neutral-300 leading-relaxed">
-            Engineered exclusively with Swift, SwiftUI, AVKit, and Swift Concurrency for iOS 16+ and macOS 13+.
+            Built with Swift, SwiftUI, AVKit, and Swift Concurrency for iOS 16+ and macOS 15+, with VLC playback fallback on Mac.
             Zero 3rd-party dependencies, leveraging Apple hardware decoding and adaptive split navigation.
           </p>
         </div>

@@ -729,16 +729,16 @@ app.get('/api/download-zip', async (_req: Request, res: Response) => {
 
     folder?.file(
       'README.md',
-      `# EasyIPTV — Native SwiftUI Player for macOS 13+ & iOS 16+
+      `# EasyIPTV — Native SwiftUI Player for macOS 15+ & iOS 16+
 
-Built with Swift, SwiftUI, AVFoundation, and Swift Concurrency.
+Built with Swift, SwiftUI, AVFoundation, VLCKit, and Swift Concurrency. macOS 15+ uses VLC as a fallback when AVKit cannot decode a stream; iOS remains on AVKit.
 Supports Live TV, Movies (VOD), and TV Shows (Series) with Xtream Codes and M3U/M3U8 playlists.
 
 ---
 
 ## ⚡ Method 1: Instant Clean Build & Run (Terminal / SwiftPM)
 
-1. Open your terminal in this extracted folder.
+1. Open your terminal in this extracted folder with Xcode 26+ installed.
 2. Remove any old cache and run directly:
    \`\`\`bash
    rm -rf .build && swift run

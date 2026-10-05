@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================================
 # EasyIPTV - Native macOS .app & .dmg Automated Build Script
-# Compatible with macOS Ventura (13.0+), Sonoma (14.0+), and Sequoia (15.0+)
-# Requires: Xcode Command Line Tools (`xcode-select --install`)
+# Compatible with macOS Sequoia (15.0+) and newer
+# Requires: Xcode 16+ with Swift 6.0 (SwiftPM builds the VLC framework)
 # ==============================================================================
 
 set -e
@@ -14,6 +14,7 @@ APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
 CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+FRAMEWORKS_DIR="${CONTENTS_DIR}/Frameworks"
 STAGING_DIR="${BUILD_DIR}/dmg_staging"
 
 # Terminal Colors
@@ -44,70 +45,43 @@ echo -e "${YELLOW}macOS SDK:${NC}    ${SDK_PATH}"
 # Clean previous build artifacts
 echo -e "\n${BLUE}[1/4] Cleaning previous build artifacts...${NC}"
 rm -rf "${BUILD_DIR}" "${DMG_NAME}" ".build"
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}"
 
-# Locate macro plugin paths for Swift 5.9+ / Xcode 15/16 (e.g. SwiftUIMacros)
-PLATFORM_DIR=$(xcrun --show-sdk-platform-path 2>/dev/null || true)
-DEVELOPER_DIR=$(xcode-select -p 2>/dev/null || true)
-PLUGIN_ARGS=()
-
-if [ -d "${PLATFORM_DIR}/Developer/usr/lib/swift/host/plugins" ]; then
-    PLUGIN_ARGS+=("-plugin-path" "${PLATFORM_DIR}/Developer/usr/lib/swift/host/plugins")
+# Compile through SwiftPM so the VLCKit binary dependency is linked correctly.
+echo -e "${BLUE}[2/4] Compiling native Swift, AVKit, and VLC sources for macOS 15+...${NC}"
+if ! command -v swift &> /dev/null; then
+    echo -e "${RED}Error: Swift Package Manager is required to build the VLC playback engine.${NC}"
+    exit 1
 fi
-if [ -d "${DEVELOPER_DIR}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins" ]; then
-    PLUGIN_ARGS+=("-plugin-path" "${DEVELOPER_DIR}/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins")
+if ! swift build -c release; then
+    echo -e "${RED}Error: SwiftPM build failed. The VLC playback framework is required; direct swiftc fallback is unavailable.${NC}"
+    exit 1
 fi
-if [ ${#PLUGIN_ARGS[@]} -eq 0 ] && [ -n "${DEVELOPER_DIR}" ]; then
-    FOUND_DIR=$(find "${DEVELOPER_DIR}" -name "libSwiftUIMacros.dylib" -exec dirname {} \; 2>/dev/null | head -n 1)
-    if [ -n "${FOUND_DIR}" ]; then
-        PLUGIN_ARGS+=("-plugin-path" "${FOUND_DIR}")
+if [ ! -f ".build/release/${APP_NAME}" ]; then
+    echo -e "${RED}Error: SwiftPM build did not produce ${APP_NAME}.${NC}"
+    exit 1
+fi
+cp ".build/release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+for RESOURCE_BUNDLE in .build/release/*.resources; do
+    if [ -d "${RESOURCE_BUNDLE}" ]; then
+        cp -R "${RESOURCE_BUNDLE}" "${MACOS_DIR}/"
     fi
+done
+
+# SwiftPM builds the executable but does not assemble a macOS .app bundle.
+# Embed VLCKit so the app does not depend on the local SwiftPM build cache.
+VLC_FRAMEWORK=$(find .build/artifacts -path '*/VLCKit.xcframework/macos-*/VLCKit.framework' -type d ! -path '*/__MACOSX/*' -print -quit)
+if [ -z "${VLC_FRAMEWORK}" ]; then
+    echo -e "${RED}Error: VLCKit.framework was not found in the SwiftPM build artifacts.${NC}"
+    exit 1
 fi
-
-# Compile all Swift files into a native macOS binary
-echo -e "${BLUE}[2/4] Compiling native Swift & AVKit sources for macOS 13+...${NC}"
-
-BUILD_SUCCESS=false
-
-# Clean previous build artifacts if needed
-rm -rf .build/release/${APP_NAME}
-
-# Method A: Swift Package Manager (handles macros and modern toolchains automatically)
-if [ -f "Package.swift" ] && command -v swift &> /dev/null; then
-    echo -e "${YELLOW}Compiling with Swift Package Manager (swift build -c release)...${NC}"
-    if swift build -c release; then
-        if [ -f ".build/release/${APP_NAME}" ]; then
-            cp ".build/release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
-            BUILD_SUCCESS=true
-            echo -e "${GREEN}✓ Binary compiled via SwiftPM successfully.${NC}"
-        fi
-    fi
-fi
-
-# Method B: Direct swiftc invocation with discovered plugin search path
-if [ "$BUILD_SUCCESS" = false ]; then
-    echo -e "${YELLOW}Compiling with swiftc direct invocation...${NC}"
-    swiftc -O \
-      -target "${ARCH}-apple-macos13.0" \
-      -sdk "${SDK_PATH}" \
-      "${PLUGIN_ARGS[@]}" \
-      -framework SwiftUI \
-      -framework AVFoundation \
-      -framework QuartzCore \
-      -framework AppKit \
-      -framework IOKit \
-      -framework Combine \
-      M3UItem.swift \
-      M3UParser.swift \
-      XtreamCodesManager.swift \
-      IPTVPlayerManager.swift \
-      IPTVPlaybackView.swift \
-      ChannelListView.swift \
-      ContentView.swift \
-      IPTVPlayerApp.swift \
-      -o "${MACOS_DIR}/${APP_NAME}"
-    echo -e "${GREEN}✓ Binary compiled with swiftc successfully.${NC}"
-fi
+cp -R "${VLC_FRAMEWORK}" "${FRAMEWORKS_DIR}/VLCKit.framework"
+VLC_BINARY="${FRAMEWORKS_DIR}/VLCKit.framework/Versions/A/VLCKit"
+VLC_INSTALL_ID=$(otool -D "${VLC_BINARY}" | tail -n 1)
+install_name_tool -id "@rpath/VLCKit.framework/Versions/A/VLCKit" "${VLC_BINARY}"
+install_name_tool -change "${VLC_INSTALL_ID}" "@rpath/VLCKit.framework/Versions/A/VLCKit" "${MACOS_DIR}/${APP_NAME}"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "${MACOS_DIR}/${APP_NAME}"
+echo -e "${GREEN}✓ Binary compiled via SwiftPM successfully.${NC}"
 
 # Package Info.plist and Resources (AppIcon)
 echo -e "${BLUE}[3/4] Assembling .app bundle & icon resources...${NC}"
@@ -166,7 +140,7 @@ else
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>15.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAppTransportSecurity</key>
@@ -177,6 +151,10 @@ else
 </dict>
 </plist>
 EOF
+fi
+
+if [ -f "LICENSE-LGPL-2.1" ]; then
+    cp LICENSE-LGPL-2.1 "${RESOURCES_DIR}/LICENSE-LGPL-2.1.txt"
 fi
 
 # Code sign locally for ad-hoc execution on Mac

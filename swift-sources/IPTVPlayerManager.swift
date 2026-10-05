@@ -2,7 +2,7 @@
 //  IPTVPlayerManager.swift
 //  IPTVPlayer
 //
-//  Created for iOS 16+ and macOS 13+
+//  Created for iOS 16+ and macOS 15+
 //
 
 import Foundation
@@ -10,19 +10,11 @@ import AVFoundation
 import Combine
 import SwiftUI
 #if os(macOS)
+import VLC
+#endif
+#if os(macOS)
 import IOKit.pwr_mgt
 #endif
-
-/// Available format engine override modes for troubleshooting video streaming
-public enum StreamFormatOverride: String, CaseIterable, Sendable {
-    case auto = "Auto (AVKit)"
-    case mp4 = "MP4 Stream (.mp4)"
-    case mkv = "MKV Format (.mkv)"
-    case hls = "Apple HLS (.m3u8)"
-    case ts = "Raw MPEG-TS (.ts)"
-    
-    public var title: String { rawValue }
-}
 
 #if os(macOS)
 /// Thread-safe, nonisolated manager for macOS power assertion lifecycle.
@@ -78,7 +70,7 @@ private final class DisplaySleepManager: @unchecked Sendable {
 /// Central coordinator handling playlist fetching, channel categorization, search filtering,
 /// persistent favorites management, and AVPlayer lifecycle.
 @MainActor
-public final class IPTVPlayerManager: ObservableObject {
+public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     // MARK: - Published State
     
@@ -141,6 +133,9 @@ public final class IPTVPlayerManager: ObservableObject {
     
     /// User-visible error message, if any occurred.
     @Published public var errorMessage: String? = nil
+
+    /// Uses VLC's broader codec and container support instead of AVPlayer on macOS.
+    @Published public var useVLCPlayback: Bool = false
     
     /// Playback state indicator.
     @Published public var isPlaying: Bool = false {
@@ -276,9 +271,6 @@ public final class IPTVPlayerManager: ObservableObject {
     /// Live TV Electronic Program Guide (EPG) modal sheet visibility.
     @Published public var showingEPGSheet: Bool = false
     
-    /// Video playback format override engine for fixing stream container errors.
-    @Published public var formatOverride: StreamFormatOverride = .auto
-    
     private var controlsTimer: Task<Void, Never>? = nil
     private var timeObserverToken: Any? = nil
     
@@ -286,6 +278,11 @@ public final class IPTVPlayerManager: ObservableObject {
     
     /// The underlying native AVPlayer instance.
     @Published public private(set) var player: AVPlayer?
+
+    #if os(macOS)
+    /// VLC playback instance used for streams AVPlayer cannot decode.
+    @Published public private(set) var vlcPlayer: VLCMediaPlayer?
+    #endif
     
     // MARK: - Private Members
     
@@ -318,7 +315,8 @@ public final class IPTVPlayerManager: ObservableObject {
     
     // MARK: - Initialization
     
-    public init() {
+    public override init() {
+        super.init()
         loadPersistedState()
         setupAudioSessionIfAvailable()
     }
@@ -519,8 +517,12 @@ public final class IPTVPlayerManager: ObservableObject {
     
     /// Plays an individual stream, movie, or resolved TV episode directly.
     public func playDirectStream(_ item: M3UItem) {
+        #if os(macOS)
+        stopVLCPlayback()
+        #endif
         self.currentChannel = item
         self.isViewingSeriesDetails = false
+        self.useVLCPlayback = false
         if item.contentType != .series {
             self.seriesEpisodes = []
             self.showingEpisodesDrawer = false
@@ -558,6 +560,35 @@ public final class IPTVPlayerManager: ObservableObject {
         self.player?.play()
         self.isPlaying = true
     }
+
+    #if os(macOS)
+    /// Switches the selected stream to VLC's in-app playback engine.
+    public func playCurrentStreamWithVLC() {
+        guard let currentChannel else { return }
+        stopVLCPlayback()
+        player?.pause()
+        player?.replaceCurrentItem(with: nil)
+        removeTimeObserver()
+        playerItemStatusObserver?.invalidate()
+        playerTimeControlObserver?.invalidate()
+        let vlc = VLCMediaPlayer()
+        vlc.delegate = self
+        vlc.media = VLCMedia(url: currentChannel.streamURL)
+        vlcPlayer = vlc
+        useVLCPlayback = true
+        errorMessage = nil
+        isBuffering = true
+        isPlaying = false
+    }
+
+    private func stopVLCPlayback() {
+        vlcPlayer?.delegate = nil
+        vlcPlayer?.drawable = nil
+        vlcPlayer?.stop()
+        vlcPlayer = nil
+        useVLCPlayback = false
+    }
+    #endif
     
     /// Queries the Xtream server for a TV show's seasons and episodes,
     /// stops playback, and presents the rich Series Overview & Episodes grid first.
@@ -568,7 +599,11 @@ public final class IPTVPlayerManager: ObservableObject {
         // Stop any active video so that the rich Series Overview hero is visible immediately
         self.player?.pause()
         self.player?.replaceCurrentItem(with: nil)
+        #if os(macOS)
+        stopVLCPlayback()
+        #endif
         self.isPlaying = false
+        self.useVLCPlayback = false
         self.isBuffering = false
         self.errorMessage = nil
         self.isLoadingEpisodes = true
@@ -622,41 +657,6 @@ public final class IPTVPlayerManager: ObservableObject {
         }
     }
     
-    /// Overrides video container format (.mp4, .mkv, .ts, .m3u8) to fix "Cannot Open" codec errors.
-    public func applyFormatOverride(_ format: StreamFormatOverride) {
-        self.formatOverride = format
-        guard let current = currentChannel else { return }
-        
-        var newUrlString = current.streamURL.absoluteString
-        switch format {
-        case .mp4:
-            newUrlString = newUrlString.replacingOccurrences(of: #"\.(mkv|avi|ts|m3u8)$"#, with: ".mp4", options: .regularExpression)
-        case .mkv:
-            newUrlString = newUrlString.replacingOccurrences(of: #"\.(mp4|avi|ts|m3u8)$"#, with: ".mkv", options: .regularExpression)
-        case .hls:
-            newUrlString = newUrlString.replacingOccurrences(of: #"\.(mp4|mkv|avi|ts)$"#, with: ".m3u8", options: .regularExpression)
-        case .ts:
-            newUrlString = newUrlString.replacingOccurrences(of: #"\.(mp4|mkv|avi|m3u8)$"#, with: ".ts", options: .regularExpression)
-        case .auto:
-            break
-        }
-        
-        if let newURL = URL(string: newUrlString) {
-            let updatedItem = M3UItem(
-                id: current.id,
-                name: current.name,
-                groupTitle: current.groupTitle,
-                logoURL: current.logoURL,
-                streamURL: newURL,
-                tvgID: current.tvgID,
-                tvgName: current.tvgName,
-                isFavorite: current.isFavorite,
-                contentType: current.contentType
-            )
-            self.playDirectStream(updatedItem)
-        }
-    }
-    
     /// Sets up a 0.5s periodic observer to track duration and progress for VOD MP4 media.
     private func setupTimeObserver() {
         removeTimeObserver()
@@ -689,7 +689,15 @@ public final class IPTVPlayerManager: ObservableObject {
     
     /// Seeks to a specific timestamp in seconds (for MP4 movies & shows).
     public func seek(to seconds: Double) {
-        guard let player = self.player, seconds.isFinite else { return }
+        guard seconds.isFinite else { return }
+        #if os(macOS)
+        if useVLCPlayback, let vlcPlayer {
+            vlcPlayer.time = VLCTime(int: Int32(max(0, min(seconds * 1000, Double(Int32.max)))))
+            currentTime = seconds
+            return
+        }
+        #endif
+        guard let player = self.player else { return }
         let target = CMTime(seconds: seconds, preferredTimescale: 600)
         player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
         self.currentTime = seconds
@@ -726,32 +734,46 @@ public final class IPTVPlayerManager: ObservableObject {
     
     /// Toggles full screen mode: on macOS toggles native window full screen and detail-only view.
     public func toggleFullscreen() {
-        isFullscreen.toggle()
         #if os(macOS)
-        if let window = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first {
-            if isFullscreen {
+        if let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow {
+            if window.styleMask.contains(.fullScreen) {
+                window.toggleFullScreen(nil)
+            } else {
                 columnVisibility = .detailOnly
                 window.toolbar?.isVisible = false
                 window.titleVisibility = .hidden
-                if !window.styleMask.contains(.fullScreen) {
-                    window.toggleFullScreen(nil)
-                }
-            } else {
-                columnVisibility = .all
-                window.toolbar?.isVisible = true
-                window.titleVisibility = .visible
-                if window.styleMask.contains(.fullScreen) {
-                    window.toggleFullScreen(nil)
-                }
+                window.toggleFullScreen(nil)
             }
         }
         #else
+        isFullscreen.toggle()
         columnVisibility = isFullscreen ? .detailOnly : .all
         #endif
     }
+
+    #if os(macOS)
+    /// Keeps SwiftUI's fullscreen state aligned with the native window transition.
+    public func updateFullscreenState(_ isFullscreen: Bool) {
+        self.isFullscreen = isFullscreen
+        columnVisibility = isFullscreen ? .detailOnly : .all
+        guard let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow else { return }
+        window.toolbar?.isVisible = !isFullscreen
+        window.titleVisibility = isFullscreen ? .hidden : .visible
+    }
+    #endif
     
     /// Toggles between play and pause.
     public func togglePlayPause() {
+        #if os(macOS)
+        if useVLCPlayback, let vlcPlayer {
+            if isPlaying {
+                vlcPlayer.pause()
+            } else {
+                vlcPlayer.play()
+            }
+            return
+        }
+        #endif
         guard let player = self.player else { return }
         if isPlaying {
             player.pause()
@@ -768,9 +790,13 @@ public final class IPTVPlayerManager: ObservableObject {
         disableDisplaySleepPrevention()
         #endif
         removeTimeObserver()
+        #if os(macOS)
+        stopVLCPlayback()
+        #endif
         self.player?.pause()
         self.player?.replaceCurrentItem(with: nil)
         self.isPlaying = false
+        self.useVLCPlayback = false
         self.isBuffering = false
         self.currentChannel = nil
         self.seriesEpisodes = []
@@ -873,9 +899,15 @@ public final class IPTVPlayerManager: ObservableObject {
                     self.isBuffering = false
                     self.isPlaying = true
                 case .failed:
+#if os(macOS)
+                    if !self.useVLCPlayback, self.currentChannel != nil {
+                        self.playCurrentStreamWithVLC()
+                        return
+                    }
+#endif
                     self.isBuffering = false
                     self.isPlaying = false
-                    self.errorMessage = item.error?.localizedDescription ?? "Playback encountered an unexpected streaming error."
+                    self.errorMessage = Self.playbackErrorDescription(for: item)
                 case .unknown:
                     self.isBuffering = true
                 @unknown default:
@@ -894,6 +926,24 @@ public final class IPTVPlayerManager: ObservableObject {
                 }
             }
         }
+    }
+
+    private static func playbackErrorDescription(for item: AVPlayerItem) -> String {
+        guard let error = item.error as NSError? else {
+            return "Playback failed before AVPlayer could decode the stream."
+        }
+
+        var details = error.localizedDescription
+        if let reason = error.localizedFailureReason, !reason.isEmpty {
+            details += " — \(reason)"
+        }
+        details += " [\(error.domain) \(error.code)]"
+
+        if let event = item.errorLog()?.events.last {
+            let domain = event.errorDomain.isEmpty ? "stream" : event.errorDomain
+            details += "\nStream: \(domain) \(event.errorStatusCode)"
+        }
+        return details
     }
     
     private func setupAudioSessionIfAvailable() {
@@ -981,3 +1031,35 @@ public final class IPTVPlayerManager: ObservableObject {
         UserDefaults.standard.set(Array(favoriteStreamURLs), forKey: favoritesKey)
     }
 }
+
+#if os(macOS)
+extension IPTVPlayerManager: VLCMediaPlayerDelegate {
+    nonisolated public func mediaPlayerStateChanged(_ notification: Notification) {
+        guard let player = notification.object as? VLCMediaPlayer else { return }
+        let state = player.state
+        let playing = player.isPlaying
+        Task { @MainActor [weak self] in
+            guard let self, self.vlcPlayer === player else { return }
+            self.isPlaying = playing
+            self.isBuffering = state == .opening || (state == .buffering && !playing)
+            if state == .error {
+                self.isBuffering = false
+                self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
+            } else if state == .playing {
+                self.errorMessage = nil
+            }
+        }
+    }
+
+    nonisolated public func mediaPlayerTimeChanged(_ notification: Notification) {
+        guard let player = notification.object as? VLCMediaPlayer else { return }
+        let current = Double(player.time.intValue) / 1000
+        let total = Double(player.media?.length.intValue ?? 0) / 1000
+        Task { @MainActor [weak self] in
+            guard let self, self.vlcPlayer === player, !self.isSeeking else { return }
+            if current.isFinite && current >= 0 { self.currentTime = current }
+            if total.isFinite && total > 0 { self.duration = total }
+        }
+    }
+}
+#endif
