@@ -77,7 +77,7 @@ public struct ContentView: View {
             .background(Color.black)
             .ignoresSafeArea()
     }
-    
+
     // MARK: - Column 1: Sidebar
     
     private var sidebarView: some View {

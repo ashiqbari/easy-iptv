@@ -282,6 +282,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #if os(macOS)
     /// VLC playback instance used for streams AVPlayer cannot decode.
     @Published public private(set) var vlcPlayer: VLCMediaPlayer?
+    private var pendingVLCResumePosition: Double?
     #endif
     
     // MARK: - Private Members
@@ -518,6 +519,21 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Plays an individual stream, movie, or resolved TV episode directly.
     public func playDirectStream(_ item: M3UItem) {
         #if os(macOS)
+        playDirectStream(item, useVLC: item.contentType == .live)
+        #else
+        playDirectStream(item, useVLC: false)
+        #endif
+    }
+
+    #if os(macOS)
+    /// Retries the selected stream explicitly with AVKit, even when it is a live channel.
+    public func playDirectStreamWithAVKit(_ item: M3UItem) {
+        playDirectStream(item, useVLC: false)
+    }
+    #endif
+
+    private func playDirectStream(_ item: M3UItem, useVLC: Bool) {
+        #if os(macOS)
         stopVLCPlayback()
         #endif
         self.currentChannel = item
@@ -531,6 +547,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         self.isBuffering = true
         self.currentTime = 0.0
         self.duration = 0.0
+
+        #if os(macOS)
+        if useVLC {
+            startVLCPlayback(for: item)
+            return
+        }
+        #endif
         
         let asset = AVURLAsset(url: item.streamURL, options: [
             AVURLAssetPreferPreciseDurationAndTimingKey: false
@@ -565,6 +588,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Switches the selected stream to VLC's in-app playback engine.
     public func playCurrentStreamWithVLC() {
         guard let currentChannel else { return }
+        startVLCPlayback(for: currentChannel)
+    }
+
+    private func startVLCPlayback(for item: M3UItem) {
         stopVLCPlayback()
         player?.pause()
         player?.replaceCurrentItem(with: nil)
@@ -573,7 +600,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         playerTimeControlObserver?.invalidate()
         let vlc = VLCMediaPlayer()
         vlc.delegate = self
-        vlc.media = VLCMedia(url: currentChannel.streamURL)
+        vlc.media = VLCMedia(url: item.streamURL)
+        pendingVLCResumePosition = nil
         vlcPlayer = vlc
         useVLCPlayback = true
         errorMessage = nil
@@ -582,6 +610,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func stopVLCPlayback() {
+        pendingVLCResumePosition = nil
         vlcPlayer?.delegate = nil
         vlcPlayer?.drawable = nil
         vlcPlayer?.stop()
@@ -736,14 +765,15 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func toggleFullscreen() {
         #if os(macOS)
         if let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow {
-            if window.styleMask.contains(.fullScreen) {
-                window.toggleFullScreen(nil)
-            } else {
+            let enteringFullscreen = !window.styleMask.contains(.fullScreen)
+            if enteringFullscreen {
+                isFullscreen = true
                 columnVisibility = .detailOnly
                 window.toolbar?.isVisible = false
                 window.titleVisibility = .hidden
-                window.toggleFullScreen(nil)
+                scheduleVLCRefreshAfterFullscreenTransition(to: true)
             }
+            window.toggleFullScreen(nil)
         }
         #else
         isFullscreen.toggle()
@@ -754,11 +784,44 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #if os(macOS)
     /// Keeps SwiftUI's fullscreen state aligned with the native window transition.
     public func updateFullscreenState(_ isFullscreen: Bool) {
+        let didChange = self.isFullscreen != isFullscreen
         self.isFullscreen = isFullscreen
         columnVisibility = isFullscreen ? .detailOnly : .all
+        if didChange {
+            scheduleVLCRefreshAfterFullscreenTransition(to: isFullscreen)
+        }
         guard let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow else { return }
         window.toolbar?.isVisible = !isFullscreen
         window.titleVisibility = isFullscreen ? .hidden : .visible
+    }
+
+    private func scheduleVLCRefreshAfterFullscreenTransition(to fullscreen: Bool) {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let self, self.isFullscreen == fullscreen, self.useVLCPlayback else { return }
+            self.restartVLCForFullscreenSurface()
+        }
+    }
+
+    private func restartVLCForFullscreenSurface() {
+        guard let channel = currentChannel, useVLCPlayback else { return }
+        let shouldResume = isPlaying || isBuffering
+        let resumePosition = currentTime
+
+        vlcPlayer?.delegate = nil
+        vlcPlayer?.drawable = nil
+        vlcPlayer?.stop()
+
+        let replacement = VLCMediaPlayer()
+        replacement.delegate = self
+        replacement.media = VLCMedia(url: channel.streamURL)
+        pendingVLCResumePosition = shouldResume && channel.isVOD && resumePosition > 1
+            ? resumePosition
+            : nil
+        vlcPlayer = replacement
+        errorMessage = nil
+        isPlaying = false
+        isBuffering = shouldResume
     }
     #endif
     
@@ -1047,6 +1110,12 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
                 self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
             } else if state == .playing {
                 self.errorMessage = nil
+                if let position = self.pendingVLCResumePosition {
+                    self.pendingVLCResumePosition = nil
+                    let milliseconds = Int32(max(0, min(position * 1000, Double(Int32.max))))
+                    player.time = VLCTime(int: milliseconds)
+                    self.currentTime = position
+                }
             }
         }
     }

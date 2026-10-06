@@ -34,7 +34,10 @@ public struct IPTVPlaybackView: View {
 #if os(macOS)
                 if manager.useVLCPlayback {
                     if let player = manager.vlcPlayer {
-                        VLCVideoSurface(player: player)
+                        VLCVideoSurface(
+                            player: player,
+                            shouldPlay: manager.isPlaying || manager.isBuffering
+                        )
                             .ignoresSafeArea()
                             .overlay {
                                 Color.clear
@@ -276,7 +279,7 @@ public struct IPTVPlaybackView: View {
                 Menu {
                     Button {
                         if manager.useVLCPlayback, let channel = manager.currentChannel {
-                            manager.playDirectStream(channel)
+                            manager.playDirectStreamWithAVKit(channel)
                         } else {
                             manager.playCurrentStreamWithVLC()
                         }
@@ -568,7 +571,7 @@ public struct IPTVPlaybackView: View {
             
             if let channel = manager.currentChannel {
                 Button {
-                    manager.playDirectStream(channel)
+                    manager.playDirectStreamWithAVKit(channel)
                 } label: {
                     Label("Retry with AVKit", systemImage: "arrow.clockwise")
                         .font(.footnote.bold())
@@ -1385,6 +1388,7 @@ public struct AVPlayerLayerRepresentable: NSViewRepresentable {
 /// AppKit surface that attaches a VLCMediaPlayer to a native view.
 private struct VLCVideoSurface: NSViewRepresentable {
     let player: VLCMediaPlayer
+    let shouldPlay: Bool
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView(frame: .zero)
@@ -1401,7 +1405,7 @@ private struct VLCVideoSurface: NSViewRepresentable {
     private func attach(_ player: VLCMediaPlayer, to view: NSView) {
         guard (player.drawable as? NSView) !== view else { return }
         player.drawable = view
-        if !player.isPlaying && !player.willPlay {
+        if shouldPlay && !player.isPlaying && !player.willPlay {
             player.play()
         }
     }
