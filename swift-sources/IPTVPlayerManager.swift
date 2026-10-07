@@ -279,6 +279,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// The underlying native AVPlayer instance.
     @Published public private(set) var player: AVPlayer?
 
+    /// Playback volume shared by AVPlayer and VLC (0.0 through 1.0).
+    @Published public var playbackVolume: Float = UserDefaults.standard.object(forKey: "com.iptvplayer.playbackVolume") == nil
+        ? 0.8
+        : UserDefaults.standard.float(forKey: "com.iptvplayer.playbackVolume") {
+        didSet { applyPlaybackVolume() }
+    }
+
     #if os(macOS)
     /// VLC playback instance used for streams AVPlayer cannot decode.
     @Published public private(set) var vlcPlayer: VLCMediaPlayer?
@@ -577,6 +584,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             newPlayer.automaticallyWaitsToMinimizeStalling = true
             self.player = newPlayer
         }
+        self.player?.volume = playbackVolume
         
         setupTimeObserver()
         observePlayerItem(playerItem)
@@ -603,6 +611,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         vlc.media = VLCMedia(url: item.streamURL)
         pendingVLCResumePosition = nil
         vlcPlayer = vlc
+        vlc.audio?.volume = Int32((playbackVolume * 100).rounded())
         useVLCPlayback = true
         errorMessage = nil
         isBuffering = true
@@ -819,11 +828,20 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             ? resumePosition
             : nil
         vlcPlayer = replacement
+        vlcPlayer?.audio?.volume = Int32((playbackVolume * 100).rounded())
         errorMessage = nil
         isPlaying = false
         isBuffering = shouldResume
     }
     #endif
+
+    private func applyPlaybackVolume() {
+        UserDefaults.standard.set(playbackVolume, forKey: "com.iptvplayer.playbackVolume")
+        player?.volume = playbackVolume
+        #if os(macOS)
+        vlcPlayer?.audio?.volume = Int32((playbackVolume * 100).rounded())
+        #endif
+    }
     
     /// Toggles between play and pause.
     public func togglePlayPause() {
@@ -915,6 +933,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    /// Keeps the playback HUD visible while the user is dragging a control slider.
+    public func cancelControlsAutoHide() {
+        controlsTimer?.cancel()
+        controlsTimer = nil
     }
     
     // MARK: - Favorites Management

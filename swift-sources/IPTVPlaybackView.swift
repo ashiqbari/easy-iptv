@@ -481,6 +481,35 @@ public struct IPTVPlaybackView: View {
                     .buttonStyle(.plain)
                     .help("Browse & Play TV Series Episodes")
                 }
+
+                HStack(spacing: 8) {
+                    Image(systemName: manager.playbackVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .foregroundColor(.white)
+                        .accessibilityHidden(true)
+                    Slider(
+                        value: Binding(
+                            get: { Double(manager.playbackVolume) },
+                            set: { manager.playbackVolume = Float($0) }
+                        ),
+                        in: 0...1,
+                        onEditingChanged: { editing in
+                            if editing {
+                                manager.cancelControlsAutoHide()
+                            } else {
+                                manager.scheduleControlsAutoHide()
+                            }
+                        }
+                    )
+                    .tint(.white)
+                    .frame(width: 100)
+                    .accessibilityLabel("Playback volume")
+                    Text("\(Int((manager.playbackVolume * 100).rounded()))%")
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(.white)
+                        .frame(minWidth: 36, alignment: .trailing)
+                        .help("Playback volume")
+                }
+                .help("Playback volume")
                 
                 // Full Screen Toggle Button
                 Button {
