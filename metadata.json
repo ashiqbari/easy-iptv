@@ -1,6 +1,0 @@
-{
-  "name": "SwiftUI IPTV Player (iOS & macOS)",
-  "description": "Native IPTV Player for iOS 16+ and macOS 15+ with SwiftUI, AVKit, and VLC playback on Mac.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}

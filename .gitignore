@@ -1,9 +1,5 @@
-node_modules/
 build/
 .build/
-dist/
-coverage/
 .DS_Store
 *.log
-.env*
-!.env.example
+swift-sources/EasyIPTV-macOS.dmg
