@@ -1,5 +1,6 @@
 build/
 .build/
+swift-sources/.swiftpm/xcode/
 .DS_Store
 *.log
 swift-sources/EasyIPTV-macOS.dmg

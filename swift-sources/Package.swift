@@ -26,7 +26,6 @@ let package = Package(
                 "build_dmg.sh",
                 "run_app.command",
                 "AppIcon.png",
-                "README.md"
             ],
             sources: [
                 "M3UItem.swift",
