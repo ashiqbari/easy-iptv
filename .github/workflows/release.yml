@@ -63,7 +63,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_info.outputs.tag }}
-          name: EasyIPTV ${{ steps.release_info.outputs.tag }}
+          name: ${{ steps.release_info.outputs.tag }}
           draft: ${{ github.event.inputs.is_draft || false }}
           prerelease: false
           generate_release_notes: true
