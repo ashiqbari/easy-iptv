@@ -16,6 +16,8 @@ EasyIPTV is a native Apple IPTV player built with SwiftUI, AVKit, and VLCKit. It
 - macOS 15 or later
 - Xcode 16 or later with Swift Package Manager
 
+For the full build and release instructions, see [GETTINGSTARTED.md](GETTINGSTARTED.md).
+
 ## Build and run
 
 ```bash
