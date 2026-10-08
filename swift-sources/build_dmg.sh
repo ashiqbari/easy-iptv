@@ -1,11 +1,19 @@
 #!/bin/bash
 # ==============================================================================
-# EasyIPTV - Native macOS .app & .dmg Automated Build Script
+# EasyIPTV - Native macOS .app & optional .dmg Automated Build Script
 # Compatible with macOS Sequoia (15.0+) and newer
 # Requires: Xcode 16+ with Swift 6.0 (SwiftPM builds the VLC framework)
 # ==============================================================================
 
 set -e
+
+BUILD_ONLY=false
+if [ "${1:-}" = "--build-only" ]; then
+    BUILD_ONLY=true
+elif [ "$#" -gt 0 ]; then
+    echo "Usage: $0 [--build-only]"
+    exit 2
+fi
 
 APP_NAME="EasyIPTV"
 DMG_NAME="EasyIPTV-macOS.dmg"
@@ -25,7 +33,11 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}======================================================${NC}"
-echo -e "${BLUE}       EasyIPTV macOS App & DMG Builder               ${NC}"
+if [ "${BUILD_ONLY}" = true ]; then
+    echo -e "${BLUE}          EasyIPTV macOS App Builder                  ${NC}"
+else
+    echo -e "${BLUE}       EasyIPTV macOS App & DMG Builder               ${NC}"
+fi
 echo -e "${BLUE}======================================================${NC}"
 
 # Check for Xcode tools
@@ -44,7 +56,10 @@ echo -e "${YELLOW}macOS SDK:${NC}    ${SDK_PATH}"
 
 # Clean previous build artifacts
 echo -e "\n${BLUE}[1/4] Cleaning previous build artifacts...${NC}"
-rm -rf "${BUILD_DIR}" "${DMG_NAME}" ".build"
+rm -rf "${BUILD_DIR}" ".build"
+if [ "${BUILD_ONLY}" = false ]; then
+    rm -f "${DMG_NAME}"
+fi
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}"
 
 # Compile through SwiftPM so the VLCKit binary dependency is linked correctly.
@@ -162,6 +177,13 @@ echo "Applying ad-hoc code signature..."
 codesign --force --deep --sign - "${APP_BUNDLE}"
 
 echo -e "${GREEN}✓ ${APP_NAME}.app created.${NC}"
+
+if [ "${BUILD_ONLY}" = true ]; then
+    echo -e "\n${GREEN}======================================================${NC}"
+    echo -e "${GREEN}  BUILD COMPLETE! ${APP_BUNDLE} is ready.${NC}"
+    echo -e "${GREEN}======================================================${NC}"
+    exit 0
+fi
 
 # Generate the DMG disk image using built-in hdiutil
 echo -e "${BLUE}[4/4] Creating ${DMG_NAME} using native hdiutil...${NC}"

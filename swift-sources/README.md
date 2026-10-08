@@ -24,11 +24,19 @@ chmod +x build_dmg.sh
 ./build_dmg.sh
 ```
 
+To build just the signed `.app` bundle without creating a disk image:
+
+```bash
+./build_dmg.sh --build-only
+```
+
+The app bundle will be at `build/EasyIPTV.app`.
+
 The script will:
 1. Resolve the SwiftPM VLC dependency and compile the native binary.
 2. Generate the macOS `.icns` iconset from `AppIcon.png`.
 3. Embed `VLCKit.framework`, assemble the `EasyIPTV.app` bundle, and apply an ad-hoc code signature.
-4. Create the final compressed `.dmg` disk image using native macOS `hdiutil` with a drag-and-drop shortcut to `/Applications`.
+4. When run without `--build-only`, create the compressed `.dmg` disk image using native macOS `hdiutil` with a drag-and-drop shortcut to `/Applications`.
 
 ---
 

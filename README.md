@@ -63,6 +63,8 @@ To produce a signed, drag-and-drop `.dmg` disk image on your local machine:
 cd swift-sources
 ./build_dmg.sh
 ```
+
+To build only the signed `.app` bundle and skip DMG creation, run `./build_dmg.sh --build-only` from `swift-sources/`. The app bundle will be at `swift-sources/build/EasyIPTV.app`.
 The output file `EasyIPTV-macOS.dmg` will be created in `swift-sources/`.
 
 ---
