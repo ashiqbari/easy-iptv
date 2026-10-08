@@ -887,15 +887,8 @@ public struct IPTVPlaybackView: View {
                                         } label: {
                                             VStack(alignment: .leading, spacing: 8) {
                                                 ZStack(alignment: .bottomTrailing) {
-                                                    RoundedRectangle(cornerRadius: 10)
-                                                        .fill(Color.white.opacity(0.08))
-                                                        .aspectRatio(16/9, contentMode: .fit)
-                                                        .overlay(
-                                                            Image(systemName: "play.circle.fill")
-                                                                .font(.system(size: 36))
-                                                                .foregroundColor(.white.opacity(0.85))
-                                                        )
-                                                    
+                                                    EpisodeArtworkView(url: ep.logoURL ?? manager.currentChannel?.logoURL)
+
                                                     Text("\(index + 1)")
                                                         .font(.caption.bold())
                                                         .foregroundColor(.white)
@@ -905,7 +898,7 @@ public struct IPTVPlaybackView: View {
                                                         .cornerRadius(4)
                                                         .padding(8)
                                                 }
-                                                
+
                                                 Text(ep.name)
                                                     .font(.caption.weight(.semibold))
                                                     .foregroundColor(.white)
@@ -936,14 +929,8 @@ public struct IPTVPlaybackView: View {
                                                 } label: {
                                                     VStack(alignment: .leading, spacing: 8) {
                                                         ZStack(alignment: .bottomTrailing) {
-                                                            RoundedRectangle(cornerRadius: 10)
-                                                                .fill(Color.white.opacity(0.08))
+                                                            EpisodeArtworkView(url: ep.logoURL ?? manager.currentChannel?.logoURL)
                                                                 .frame(width: 220, height: 124)
-                                                                .overlay(
-                                                                    Image(systemName: "play.circle.fill")
-                                                                        .font(.system(size: 36))
-                                                                        .foregroundColor(.white.opacity(0.85))
-                                                                )
                                                             
                                                             Text("\(index + 1)")
                                                                 .font(.caption.bold())
@@ -1103,6 +1090,46 @@ public struct IPTVPlaybackView: View {
             .padding()
             .shadow(radius: 20)
         }
+    }
+}
+
+private struct EpisodeArtworkView: View {
+    let url: URL?
+
+    var body: some View {
+        ZStack {
+            Color.white.opacity(0.08)
+
+            if let url {
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        placeholder
+                    }
+                }
+            } else {
+                placeholder
+            }
+
+            Image(systemName: "play.circle.fill")
+                .font(.system(size: 36))
+                .foregroundColor(.white.opacity(0.9))
+                .shadow(color: .black.opacity(0.5), radius: 5)
+        }
+        .frame(maxWidth: .infinity)
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var placeholder: some View {
+        Image(systemName: "photo")
+            .font(.title2)
+            .foregroundColor(.white.opacity(0.35))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white.opacity(0.08))
     }
 }
 

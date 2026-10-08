@@ -427,6 +427,11 @@ public actor XtreamCodesManager {
                 let epIdStr = "\(epId)"
                 let title = (ep["title"] as? String) ?? "Episode \(ep["episode_num"] ?? "")"
                 let ext = (ep["container_extension"] as? String) ?? "mp4"
+                let episodeInfo = ep["info"] as? [String: Any] ?? [:]
+                let artworkString = ["movie_image", "cover", "image"]
+                    .compactMap { episodeInfo[$0] as? String }
+                    .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+                let artworkURL = artworkString.flatMap { URL(string: $0) }
                 let streamEndpoint = "\(cleanBase)/series/\(userEnc)/\(passEnc)/\(epIdStr).\(ext)"
                 guard let finalURL = URL(string: streamEndpoint) else { continue }
                 
@@ -434,6 +439,7 @@ public actor XtreamCodesManager {
                     M3UItem(
                         name: "S\(seasonKey) • \(title)",
                         groupTitle: "Season \(seasonKey)",
+                        logoURL: artworkURL,
                         streamURL: finalURL,
                         contentType: .series
                     )

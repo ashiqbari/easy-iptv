@@ -633,6 +633,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func fetchAndShowSeries(_ item: M3UItem) {
         self.currentChannel = item
         self.isViewingSeriesDetails = true
+        self.isSeriesGridView = true
         
         // Stop any active video so that the rich Series Overview hero is visible immediately
         self.player?.pause()
