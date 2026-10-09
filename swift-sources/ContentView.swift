@@ -10,21 +10,37 @@ import SwiftUI
 import AppKit
 
 private struct PlaybackBoundsPreferenceKey: PreferenceKey {
-    static var defaultValue: Anchor<CGRect>? { nil }
+    static var defaultValue: CGRect { .zero }
 
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
-        value = nextValue() ?? value
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next.width > 0 && next.height > 0 { value = next }
+    }
+}
+
+/// Missing anchors occur during layout changes. They must never turn the player
+/// into a window-sized overlay over the category/channel panes.
+struct LibraryPaneLayout {
+    static func visibility(categories: Bool, channels: Bool) -> NavigationSplitViewVisibility {
+        categories ? .all : (channels ? .doubleColumn : .detailOnly)
+    }
+
+    static func playbackFrame(fullscreen: Bool, containerSize: CGSize, detailBounds: CGRect?) -> CGRect {
+        fullscreen ? CGRect(origin: .zero, size: containerSize) : (detailBounds ?? .zero)
     }
 }
 #endif
 
 /// Main cross-platform container coordinating sidebar categories, channel list, and video player
-/// using modern three-column `NavigationSplitView`.
+/// with native navigation split panes and independently scoped sidebar controls.
 public struct ContentView: View {
     
     // MARK: - State Management
     
     @ObservedObject var manager: IPTVPlayerManager
+    #if os(macOS)
+    @State private var playbackBounds: CGRect = .zero
+    #endif
     
     public init(manager: IPTVPlayerManager) {
         self.manager = manager
@@ -33,23 +49,28 @@ public struct ContentView: View {
     public var body: some View {
         Group {
 #if os(macOS)
-            // Playback stays in one overlay across fullscreen transitions. The split
-            // view provides its normal bounds but cannot leave navigation over video.
-            navigationSplitView
-                .opacity(manager.isFullscreen ? 0 : 1)
-                .allowsHitTesting(!manager.isFullscreen)
-                .accessibilityHidden(manager.isFullscreen)
-                .overlayPreferenceValue(PlaybackBoundsPreferenceKey.self) { anchor in
-                    GeometryReader { geometry in
-                        let bounds = manager.isFullscreen
-                            ? CGRect(origin: .zero, size: geometry.size)
-                            : anchor.map { geometry[$0] } ?? CGRect(origin: .zero, size: geometry.size)
+            GeometryReader { geometry in
+                let bounds = LibraryPaneLayout.playbackFrame(
+                    fullscreen: manager.isFullscreen, containerSize: geometry.size,
+                    detailBounds: playbackBounds
+                )
+                ZStack(alignment: .topLeading) {
+                    macLibraryLayout
+                        .opacity(manager.isFullscreen ? 0 : 1)
+                        .allowsHitTesting(!manager.isFullscreen)
+                        .accessibilityHidden(manager.isFullscreen)
 
-                        IPTVPlaybackView(manager: manager)
-                            .frame(width: bounds.width, height: bounds.height)
-                            .position(x: bounds.midX, y: bounds.midY)
-                    }
+                    // A sibling keeps the native video surface alive when split-view structure changes.
+                    IPTVPlaybackView(manager: manager)
+                        .frame(width: bounds.width, height: bounds.height)
+                        .clipped()
+                        .position(x: bounds.midX, y: bounds.midY)
                 }
+                .coordinateSpace(name: "libraryPlayback")
+                .onPreferenceChange(PlaybackBoundsPreferenceKey.self) { bounds in
+                    if bounds.width > 0 && bounds.height > 0 { playbackBounds = bounds }
+                }
+            }
 #else
             if !manager.isFullscreen {
                 navigationSplitView
@@ -97,6 +118,66 @@ public struct ContentView: View {
         #endif
     }
 
+    #if os(macOS)
+    private var categoriesVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding {
+            LibraryPaneLayout.visibility(categories: manager.showsCategoriesSidebar, channels: manager.showsChannelsSidebar)
+        } set: { visibility in
+            let visible = visibility == .all
+            if visible != manager.showsCategoriesSidebar {
+                manager.toggleCategoriesSidebar()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var macLibraryLayout: some View {
+        // Keep native per-column titlebars. When channels are hidden, use the
+        // two-column form instead of asking .detailOnly to hide both sidebars.
+        // The player lives outside either split, so changing this chrome never
+        // recreates its rendering surface.
+        if manager.showsChannelsSidebar {
+            NavigationSplitView(columnVisibility: categoriesVisibility) {
+                sidebarView
+                    .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
+            } content: {
+                ChannelListView(manager: manager)
+                    .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 620)
+            } detail: {
+                playbackPlaceholder
+            }
+            .navigationSplitViewStyle(.balanced)
+        } else {
+            NavigationSplitView(columnVisibility: categoriesVisibility) {
+                sidebarView
+                    .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
+            } detail: {
+                playbackPlaceholder
+                    .toolbar {
+                        ToolbarItem(placement: .navigation) {
+                            Button { manager.toggleChannelsSidebar() } label: {
+                                Label("Show Channels", systemImage: "sidebar.right")
+                            }
+                            .help("Show the channel sidebar")
+                            .keyboardShortcut("2", modifiers: [.command, .shift])
+                        }
+                    }
+            }
+            .navigationSplitViewStyle(.balanced)
+        }
+    }
+
+    private var playbackPlaceholder: some View {
+        Color.black
+            .background {
+                GeometryReader { geometry in
+                    Color.clear.preference(key: PlaybackBoundsPreferenceKey.self,
+                                           value: geometry.frame(in: .named("libraryPlayback")))
+                }
+            }
+    }
+    #endif
+
     private var navigationSplitView: some View {
         NavigationSplitView(columnVisibility: $manager.columnVisibility) {
             sidebarView
@@ -106,8 +187,7 @@ public struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 620)
         } detail: {
 #if os(macOS)
-            Color.black
-                .anchorPreference(key: PlaybackBoundsPreferenceKey.self, value: .bounds) { $0 }
+            playbackPlaceholder
 #else
             IPTVPlaybackView(manager: manager)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -136,7 +216,7 @@ public struct ContentView: View {
             
             List(selection: $manager.selectedCategory) {
                 Section("Quick Access") {
-                    NavigationLink(value: "All") {
+                    categoryRow("All") {
                         Label {
                             HStack {
                                 Text("All \(manager.selectedSection.rawValue)")
@@ -152,7 +232,7 @@ public struct ContentView: View {
                         }
                     }
                     
-                    NavigationLink(value: "Favorites") {
+                    categoryRow("Favorites") {
                         Label {
                             HStack {
                                 Text("Favorites")
@@ -172,7 +252,7 @@ public struct ContentView: View {
                 Section("Categories") {
                     let customCategories = manager.categories.filter { $0 != "All" && $0 != "Favorites" && $0 != "★ Favorites" }
                     ForEach(customCategories, id: \.self) { category in
-                        NavigationLink(value: category) {
+                        categoryRow(category) {
                             Label {
                                 HStack {
                                     Text(category)
@@ -211,6 +291,15 @@ public struct ContentView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func categoryRow<LabelContent: View>(_ category: String, @ViewBuilder label: () -> LabelContent) -> some View {
+        #if os(macOS)
+        label().tag(category)
+        #else
+        NavigationLink(value: category, label: label)
+        #endif
     }
     
     // MARK: - Sheets

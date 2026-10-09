@@ -184,6 +184,20 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Navigation split view visibility state.
     @Published public var columnVisibility: NavigationSplitViewVisibility = .all
+    // Desktop panes are independent; fullscreen temporarily hides navigation
+    // without overwriting the user's choices for either pane.
+    @Published public private(set) var showsCategoriesSidebar = true
+    @Published public private(set) var showsChannelsSidebar = true
+
+    public func toggleCategoriesSidebar() {
+        guard !isFullscreen else { return }
+        showsCategoriesSidebar.toggle()
+    }
+
+    public func toggleChannelsSidebar() {
+        guard !isFullscreen else { return }
+        showsChannelsSidebar.toggle()
+    }
     
     /// Controls whether the playlist input modal is visible.
     @Published public var showingPlaylistSheet: Bool = false

@@ -68,15 +68,13 @@ public struct ChannelListView: View {
         .toolbar {
             #if os(macOS)
             ToolbarItem(placement: .navigation) {
-                Button {
-                    NSApp.keyWindow?.firstResponder?.tryToPerform(#selector(NSSplitViewController.toggleSidebar(_:)), with: nil)
-                } label: {
-                    Label("Toggle Sidebar", systemImage: "sidebar.leading")
+                Button { manager.toggleChannelsSidebar() } label: {
+                    Label("Hide Channels", systemImage: "sidebar.right")
                 }
-                .help("Toggle sidebar visibility")
+                .help("Show or hide only the channel sidebar")
+                .keyboardShortcut("2", modifiers: [.command, .shift])
             }
             #endif
-            
             ToolbarItem(placement: .automatic) {
                 Button {
                     Task {
