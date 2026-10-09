@@ -8,6 +8,14 @@
 import SwiftUI
 #if os(macOS)
 import AppKit
+
+private struct PlaybackBoundsPreferenceKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
 #endif
 
 /// Main cross-platform container coordinating sidebar categories, channel list, and video player
@@ -25,11 +33,23 @@ public struct ContentView: View {
     public var body: some View {
         Group {
 #if os(macOS)
-            if manager.isFullscreen {
-                fullscreenPlaybackView
-            } else {
-                navigationSplitView
-            }
+            // Playback stays in one overlay across fullscreen transitions. The split
+            // view provides its normal bounds but cannot leave navigation over video.
+            navigationSplitView
+                .opacity(manager.isFullscreen ? 0 : 1)
+                .allowsHitTesting(!manager.isFullscreen)
+                .accessibilityHidden(manager.isFullscreen)
+                .overlayPreferenceValue(PlaybackBoundsPreferenceKey.self) { anchor in
+                    GeometryReader { geometry in
+                        let bounds = manager.isFullscreen
+                            ? CGRect(origin: .zero, size: geometry.size)
+                            : anchor.map { geometry[$0] } ?? CGRect(origin: .zero, size: geometry.size)
+
+                        IPTVPlaybackView(manager: manager)
+                            .frame(width: bounds.width, height: bounds.height)
+                            .position(x: bounds.midX, y: bounds.midY)
+                    }
+                }
 #else
             if !manager.isFullscreen {
                 navigationSplitView
@@ -65,17 +85,15 @@ public struct ContentView: View {
             ChannelListView(manager: manager)
                 .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 620)
         } detail: {
+#if os(macOS)
+            Color.black
+                .anchorPreference(key: PlaybackBoundsPreferenceKey.self, value: .bounds) { $0 }
+#else
             IPTVPlaybackView(manager: manager)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+#endif
         }
         .navigationSplitViewStyle(.balanced)
-    }
-
-    private var fullscreenPlaybackView: some View {
-        IPTVPlaybackView(manager: manager)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-            .ignoresSafeArea()
     }
 
     // MARK: - Column 1: Sidebar

@@ -289,7 +289,6 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #if os(macOS)
     /// VLC playback instance used for streams AVPlayer cannot decode.
     @Published public private(set) var vlcPlayer: VLCMediaPlayer?
-    private var pendingVLCResumePosition: Double?
     #endif
     
     // MARK: - Private Members
@@ -609,7 +608,6 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         let vlc = VLCMediaPlayer()
         vlc.delegate = self
         vlc.media = VLCMedia(url: item.streamURL)
-        pendingVLCResumePosition = nil
         vlcPlayer = vlc
         vlc.audio?.volume = Int32((playbackVolume * 100).rounded())
         useVLCPlayback = true
@@ -619,7 +617,6 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func stopVLCPlayback() {
-        pendingVLCResumePosition = nil
         vlcPlayer?.delegate = nil
         vlcPlayer?.drawable = nil
         vlcPlayer?.stop()
@@ -781,7 +778,6 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 columnVisibility = .detailOnly
                 window.toolbar?.isVisible = false
                 window.titleVisibility = .hidden
-                scheduleVLCRefreshAfterFullscreenTransition(to: true)
             }
             window.toggleFullScreen(nil)
         }
@@ -794,45 +790,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #if os(macOS)
     /// Keeps SwiftUI's fullscreen state aligned with the native window transition.
     public func updateFullscreenState(_ isFullscreen: Bool) {
-        let didChange = self.isFullscreen != isFullscreen
         self.isFullscreen = isFullscreen
         columnVisibility = isFullscreen ? .detailOnly : .all
-        if didChange {
-            scheduleVLCRefreshAfterFullscreenTransition(to: isFullscreen)
-        }
         guard let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow else { return }
         window.toolbar?.isVisible = !isFullscreen
         window.titleVisibility = isFullscreen ? .hidden : .visible
-    }
-
-    private func scheduleVLCRefreshAfterFullscreenTransition(to fullscreen: Bool) {
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard let self, self.isFullscreen == fullscreen, self.useVLCPlayback else { return }
-            self.restartVLCForFullscreenSurface()
-        }
-    }
-
-    private func restartVLCForFullscreenSurface() {
-        guard let channel = currentChannel, useVLCPlayback else { return }
-        let shouldResume = isPlaying || isBuffering
-        let resumePosition = currentTime
-
-        vlcPlayer?.delegate = nil
-        vlcPlayer?.drawable = nil
-        vlcPlayer?.stop()
-
-        let replacement = VLCMediaPlayer()
-        replacement.delegate = self
-        replacement.media = VLCMedia(url: channel.streamURL)
-        pendingVLCResumePosition = shouldResume && channel.isVOD && resumePosition > 1
-            ? resumePosition
-            : nil
-        vlcPlayer = replacement
-        vlcPlayer?.audio?.volume = Int32((playbackVolume * 100).rounded())
-        errorMessage = nil
-        isPlaying = false
-        isBuffering = shouldResume
     }
     #endif
 
@@ -1135,12 +1097,6 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
                 self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
             } else if state == .playing {
                 self.errorMessage = nil
-                if let position = self.pendingVLCResumePosition {
-                    self.pendingVLCResumePosition = nil
-                    let milliseconds = Int32(max(0, min(position * 1000, Double(Int32.max))))
-                    player.time = VLCTime(int: milliseconds)
-                    self.currentTime = position
-                }
             }
         }
     }
