@@ -55,6 +55,19 @@ public struct M3UItem: Identifiable, Hashable, Codable, Sendable {
     
     /// The primary content type (Live TV, Movie, or TV Show).
     public let contentType: ContentType
+
+    // Optional fields keep existing saved playlists decodable.
+    public let mediaID: String?
+    public let seriesID: String?
+    public let seasonNumber: Int?
+    public let episodeNumber: Int?
+    public let subtitleSources: [SubtitleSource]?
+
+    /// The stream URL scopes IDs to their provider/account and distinguishes M3U episodes.
+    public var subtitleCacheKey: String {
+        [streamURL.absoluteString, contentType.rawValue, mediaID ?? "", seriesID ?? "",
+         seasonNumber.map(String.init) ?? "", episodeNumber.map(String.init) ?? ""].joined(separator: "|")
+    }
     
     // MARK: - Initializer
     
@@ -67,7 +80,12 @@ public struct M3UItem: Identifiable, Hashable, Codable, Sendable {
         tvgID: String? = nil,
         tvgName: String? = nil,
         isFavorite: Bool = false,
-        contentType: ContentType? = nil
+        contentType: ContentType? = nil,
+        mediaID: String? = nil,
+        seriesID: String? = nil,
+        seasonNumber: Int? = nil,
+        episodeNumber: Int? = nil,
+        subtitleSources: [SubtitleSource]? = nil
     ) {
         self.id = id
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,6 +98,11 @@ public struct M3UItem: Identifiable, Hashable, Codable, Sendable {
         self.tvgID = tvgID
         self.tvgName = tvgName
         self.isFavorite = isFavorite
+        self.mediaID = mediaID
+        self.seriesID = seriesID
+        self.seasonNumber = seasonNumber
+        self.episodeNumber = episodeNumber
+        self.subtitleSources = subtitleSources
         
         // Auto-detect content classification if not explicitly provided
         if let explicit = contentType {

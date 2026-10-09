@@ -71,6 +71,7 @@ private final class DisplaySleepManager: @unchecked Sendable {
 /// persistent favorites management, and AVPlayer lifecycle.
 @MainActor
 public final class IPTVPlayerManager: NSObject, ObservableObject {
+    let subtitles = SubtitleController()
     
     // MARK: - Published State
     
@@ -189,7 +190,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var isFullscreen: Bool = false
     
     /// Current playback progress in seconds for VOD (MP4 movies and TV shows).
-    @Published public var currentTime: Double = 0.0
+    @Published public var currentTime: Double = 0.0 {
+        didSet { subtitles.updateTime(currentTime) }
+    }
     
     /// Total duration in seconds for VOD media.
     @Published public var duration: Double = 0.0
@@ -289,6 +292,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #if os(macOS)
     /// VLC playback instance used for streams AVPlayer cannot decode.
     @Published public private(set) var vlcPlayer: VLCMediaPlayer?
+    // VLCKit's stop() is asynchronous. Keep players and drawables alive until
+    // their stopped notification, even after the UI switches playback engines.
+    private var retiringVLCPlayers: [ObjectIdentifier: VLCMediaPlayer] = [:]
     #endif
     
     // MARK: - Private Members
@@ -539,6 +545,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #endif
 
     private func playDirectStream(_ item: M3UItem, useVLC: Bool) {
+        subtitles.reset(for: item.isVOD ? item : nil)
         #if os(macOS)
         stopVLCPlayback()
         #endif
@@ -565,6 +572,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             AVURLAssetPreferPreciseDurationAndTimingKey: false
         ])
         let playerItem = AVPlayerItem(asset: asset)
+        if item.isVOD {
+            subtitles.configure(item: playerItem, provider: subtitleProvider(for: item))
+        }
         
         if item.isVOD {
             playerItem.preferredForwardBufferDuration = 0 // Progressive buffering for MP4
@@ -599,6 +609,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func startVLCPlayback(for item: M3UItem) {
+        subtitles.reset(for: item.isVOD ? item : nil)
         stopVLCPlayback()
         player?.pause()
         player?.replaceCurrentItem(with: nil)
@@ -609,6 +620,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         vlc.delegate = self
         vlc.media = VLCMedia(url: item.streamURL)
         vlcPlayer = vlc
+        if item.isVOD {
+            subtitles.configure(player: vlc, provider: subtitleProvider(for: item))
+        }
         vlc.audio?.volume = Int32((playbackVolume * 100).rounded())
         useVLCPlayback = true
         errorMessage = nil
@@ -617,17 +631,21 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func stopVLCPlayback() {
-        vlcPlayer?.delegate = nil
-        vlcPlayer?.drawable = nil
-        vlcPlayer?.stop()
+        guard let previous = vlcPlayer else {
+            useVLCPlayback = false
+            return
+        }
+        retiringVLCPlayers[ObjectIdentifier(previous)] = previous
         vlcPlayer = nil
         useVLCPlayback = false
+        previous.stop()
     }
     #endif
     
     /// Queries the Xtream server for a TV show's seasons and episodes,
     /// stops playback, and presents the rich Series Overview & Episodes grid first.
     public func fetchAndShowSeries(_ item: M3UItem) {
+        subtitles.reset(for: nil)
         self.currentChannel = item
         self.isViewingSeriesDetails = true
         self.isSeriesGridView = true
@@ -693,12 +711,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         }
     }
     
-    /// Sets up a 0.5s periodic observer to track duration and progress for VOD MP4 media.
+    /// Tracks the media clock at 100 ms intervals for progress and sidecar subtitles.
     private func setupTimeObserver() {
         removeTimeObserver()
         guard let pl = self.player else { return }
         
-        let interval = CMTime(seconds: 0.5, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
+        let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         timeObserverToken = pl.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in
                 guard let self = self, !self.isSeeking else { return }
@@ -726,6 +744,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Seeks to a specific timestamp in seconds (for MP4 movies & shows).
     public func seek(to seconds: Double) {
         guard seconds.isFinite else { return }
+        subtitles.clearForSeek()
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer {
             vlcPlayer.time = VLCTime(int: Int32(max(0, min(seconds * 1000, Double(Int32.max)))))
@@ -830,6 +849,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Stops playback and releases the current player item.
     public func stop() {
+        subtitles.reset(for: nil)
         #if os(macOS)
         disableDisplaySleepPrevention()
         #endif
@@ -888,9 +908,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Schedules auto-hide of controls after 4 seconds of inactivity.
     public func scheduleControlsAutoHide() {
         controlsTimer?.cancel()
+        guard !subtitles.showingMenu else { return }
         controlsTimer = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if !Task.isCancelled {
+            if !Task.isCancelled, self?.subtitles.showingMenu != true {
                 withAnimation {
                     self?.showVideoControls = false
                 }
@@ -902,6 +923,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func cancelControlsAutoHide() {
         controlsTimer?.cancel()
         controlsTimer = nil
+    }
+
+    private func subtitleProvider(for item: M3UItem) -> () async throws -> [SubtitleSource] {
+        let service = xtreamManager
+        return {
+            try await service.fetchSubtitleSources(for: item)
+        }
     }
     
     // MARK: - Favorites Management
@@ -943,11 +971,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         // Observe status (readyToPlay, failed, unknown)
         playerItemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
-                guard let self = self else { return }
+                guard let self = self, !self.useVLCPlayback, self.player?.currentItem === item else { return }
                 switch item.status {
                 case .readyToPlay:
                     self.isBuffering = false
                     self.isPlaying = true
+                    self.subtitles.loadTracksIfNeeded()
                 case .failed:
 #if os(macOS)
                     if !self.useVLCPlayback, self.currentChannel != nil {
@@ -970,7 +999,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         if let player = self.player {
             playerTimeControlObserver = player.observe(\.timeControlStatus, options: [.new]) { [weak self] pl, _ in
                 Task { @MainActor [weak self] in
-                    guard let self = self else { return }
+                    guard let self = self, !self.useVLCPlayback, self.player === pl,
+                          pl.currentItem === playerItem else { return }
                     self.isPlaying = pl.timeControlStatus == .playing
                     self.isBuffering = pl.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 }
@@ -1089,7 +1119,17 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
         let state = player.state
         let playing = player.isPlaying
         Task { @MainActor [weak self] in
-            guard let self, self.vlcPlayer === player else { return }
+            guard let self else { return }
+            let identity = ObjectIdentifier(player)
+            if self.retiringVLCPlayers[identity] != nil {
+                if state == .stopped {
+                    player.delegate = nil
+                    player.drawable = nil
+                    self.retiringVLCPlayers.removeValue(forKey: identity)
+                }
+                return
+            }
+            guard self.vlcPlayer === player else { return }
             self.isPlaying = playing
             self.isBuffering = state == .opening || (state == .buffering && !playing)
             if state == .error {
@@ -1097,6 +1137,7 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
                 self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
             } else if state == .playing {
                 self.errorMessage = nil
+                self.subtitles.nativePlayerDidStart()
             }
         }
     }

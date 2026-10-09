@@ -139,7 +139,10 @@ public actor M3UParser {
             streamURL: streamURL,
             tvgID: tvgID,
             tvgName: tvgName,
-            isFavorite: false
+            isFavorite: false,
+            subtitleSources: extractAttribute(named: "subtitle-url", from: extInf)
+                .flatMap { URL(string: $0, relativeTo: streamURL)?.absoluteURL }
+                .map { [SubtitleSource(url: $0, label: extractAttribute(named: "subtitle-language", from: extInf) ?? "Subtitles")] }
         )
     }
     

@@ -45,6 +45,7 @@ public struct IPTVPlaybackView: View {
                                     .onTapGesture(count: 2) { manager.toggleFullscreen() }
                                     .onTapGesture(count: 1) { manager.toggleVideoControls() }
                             }
+                        SubtitleOverlay(controller: manager.subtitles, controlsVisible: manager.showVideoControls)
                         if manager.isBuffering { bufferingOverlay }
                         if let errorMsg = manager.errorMessage { errorOverlay(message: errorMsg) }
                         if manager.showVideoControls { controlsOverlay }
@@ -106,6 +107,8 @@ public struct IPTVPlaybackView: View {
                             }
                     )
                 
+                SubtitleOverlay(controller: manager.subtitles, controlsVisible: manager.showVideoControls)
+
                 // Buffering Spinner Overlay
                 if manager.isBuffering {
                     bufferingOverlay
@@ -449,6 +452,18 @@ public struct IPTVPlaybackView: View {
                 }
             }
             
+            GeometryReader { geometry in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    bottomActions
+                        .frame(minWidth: geometry.size.width)
+                }
+            }
+            .frame(height: 44)
+        }
+    }
+
+    /// Keep every control reachable when the video pane or mobile screen is narrow.
+    private var bottomActions: some View {
             HStack {
                 if let channel = manager.currentChannel {
                     HStack(spacing: 8) {
@@ -480,6 +495,10 @@ public struct IPTVPlaybackView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Browse & Play TV Series Episodes")
+                }
+
+                if manager.currentChannel?.isVOD == true {
+                    SubtitleControls(manager: manager, controller: manager.subtitles)
                 }
 
                 HStack(spacing: 8) {
@@ -540,7 +559,6 @@ public struct IPTVPlaybackView: View {
                 }
                 .buttonStyle(.plain)
             }
-        }
     }
     
     private var fallbackLogo: some View {

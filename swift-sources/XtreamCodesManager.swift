@@ -354,7 +354,8 @@ public actor XtreamCodesManager {
                 logoURL: vod.streamIcon.flatMap { URL(string: $0) },
                 streamURL: finalURL,
                 isFavorite: false,
-                contentType: .movie
+                contentType: .movie,
+                mediaID: String(vod.streamId)
             )
         }
     }
@@ -396,7 +397,8 @@ public actor XtreamCodesManager {
                 logoURL: show.cover.flatMap { URL(string: $0) },
                 streamURL: finalURL,
                 isFavorite: false,
-                contentType: .series
+                contentType: .series,
+                seriesID: String(show.seriesId)
             )
         }
     }
@@ -441,7 +443,13 @@ public actor XtreamCodesManager {
                         groupTitle: "Season \(seasonKey)",
                         logoURL: artworkURL,
                         streamURL: finalURL,
-                        contentType: .series
+                        contentType: .series,
+                        mediaID: epIdStr,
+                        seriesID: String(seriesId),
+                        seasonNumber: Int(seasonKey),
+                        episodeNumber: Int("\(ep["episode_num"] ?? "")"),
+                        subtitleSources: SubtitleSource.fromMetadata(episodeInfo, relativeTo: URL(string: cleanBase + "/"))
+                            + SubtitleSource.fromMetadata(ep, relativeTo: URL(string: cleanBase + "/"))
                     )
                 )
             }
@@ -449,6 +457,43 @@ public actor XtreamCodesManager {
         return episodeItems
     }
     
+    /// Movies can advertise sidecar files in get_vod_info. Embedded tracks are
+    /// discovered separately by the playback engine. Episodes already have info.
+    public func fetchSubtitleSources(for item: M3UItem) async throws -> [SubtitleSource] {
+        guard let url = subtitleRequest(for: item) else {
+            return item.subtitleSources ?? []
+        }
+        let data = try await performRequest(url: url)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["info"] != nil || json["movie_data"] != nil || json["subtitles"] != nil else {
+            throw XtreamCodesError.invalidResponse
+        }
+        let base = url.deletingLastPathComponent().appendingPathComponent("")
+        return (item.subtitleSources ?? []) + [json, json["info"] as? [String: Any] ?? [:],
+            json["movie_data"] as? [String: Any] ?? [:]].flatMap { SubtitleSource.fromMetadata($0, relativeTo: base) }
+    }
+
+    /// Derive the provider and account from this stream, rather than using a saved
+    /// account that may belong to a different playlist. Preserve provider subpaths.
+    func subtitleRequest(for item: M3UItem) -> URL? {
+        let path = item.streamURL.pathComponents
+        guard item.contentType == .movie,
+              let movieIndex = path.lastIndex(of: "movie"), path.count == movieIndex + 4,
+              let mediaID = item.mediaID ?? Int(item.streamURL.deletingPathExtension().lastPathComponent).map(String.init),
+              var components = URLComponents(url: item.streamURL, resolvingAgainstBaseURL: true),
+              ["http", "https"].contains(components.scheme?.lowercased() ?? "") else { return nil }
+        components.path = "/" + path.dropFirst().prefix(movieIndex - 1).joined(separator: "/")
+            + (movieIndex > 1 ? "/" : "") + "player_api.php"
+        components.queryItems = [
+            URLQueryItem(name: "username", value: path[movieIndex + 1]),
+            URLQueryItem(name: "password", value: path[movieIndex + 2]),
+            URLQueryItem(name: "action", value: "get_vod_info"),
+            URLQueryItem(name: "vod_id", value: mediaID)
+        ]
+        components.fragment = nil
+        return components.url
+    }
+
     /// Generates the direct M3U Plus playlist download URL for this Xtream account.
     public func directM3UPlusURL(serverURL: String, username: String, password: String) -> URL? {
         let cleanBase = sanitizeBaseURL(serverURL)

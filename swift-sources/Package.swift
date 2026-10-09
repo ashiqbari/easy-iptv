@@ -26,6 +26,7 @@ let package = Package(
                 "build_dmg.sh",
                 "run_app.command",
                 "AppIcon.png",
+                "Tests",
             ],
             sources: [
                 "M3UItem.swift",
@@ -33,6 +34,9 @@ let package = Package(
                 "XtreamCodesManager.swift",
                 "IPTVPlayerManager.swift",
                 "IPTVPlaybackView.swift",
+                "Subtitles.swift",
+                "SubtitleController.swift",
+                "SubtitleControls.swift",
                 "ChannelListView.swift",
                 "ContentView.swift",
                 "IPTVPlayerApp.swift"
@@ -43,7 +47,8 @@ let package = Package(
                 .linkedFramework("AppKit", .when(platforms: [.macOS])),
                 .linkedFramework("IOKit", .when(platforms: [.macOS]))
             ]
-        )
+        ),
+        .testTarget(name: "SubtitleTests", dependencies: ["EasyIPTV"], path: "Tests")
     ],
     swiftLanguageModes: [.v5]
 )
