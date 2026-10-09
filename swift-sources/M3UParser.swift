@@ -93,7 +93,7 @@ public actor M3UParser {
             // Non-comment line following an EXTINF directive is the stream URL
             if let extInf = pendingExtInf {
                 let cleanURLString = line.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? line
-                if let streamURL = URL(string: cleanURLString) ?? URL(string: line) {
+                if let streamURL = URL(string: line) ?? URL(string: cleanURLString) {
                     let parsedItem = Self.parseExtInf(extInf: extInf, streamURL: streamURL)
                     items.append(parsedItem)
                 }
@@ -119,10 +119,21 @@ public actor M3UParser {
         let logoURL = logoURLString.flatMap { URL(string: $0) }
         
         // Extract channel name:
-        // In standard M3U, the display name comes after the last comma:
+        // The first comma outside quoted metadata separates the display name.
+        // Names and quoted attributes can themselves contain commas.
         // #EXTINF:-1 tvg-name="Foo" group-title="Bar",Display Name Here
         var displayName: String = ""
-        if let commaIndex = extInf.lastIndex(of: ",") {
+        var quote: Character?
+        let commaIndex = extInf.indices.first { index in
+            let character = extInf[index]
+            if let active = quote {
+                if character == active { quote = nil }
+            } else if character == "\"" || character == "'" {
+                quote = character
+            } else if character == "," { return true }
+            return false
+        }
+        if let commaIndex {
             let substring = extInf[extInf.index(after: commaIndex)...]
             displayName = substring.trimmingCharacters(in: .whitespacesAndNewlines)
         }
@@ -149,12 +160,9 @@ public actor M3UParser {
     /// Ultra-fast attribute extraction matching `attributeName="value"` or `attributeName='value'`
     /// without NSRegularExpression compilation overhead.
     private static func extractAttribute(named attributeName: String, from text: String) -> String? {
-        let nameLower = attributeName.lowercased()
-        let textLower = text.lowercased()
-        
         for quote in ["\"", "'"] {
-            let prefix = nameLower + "=" + quote
-            if let range = textLower.range(of: prefix) {
+            let prefix = attributeName + "=" + quote
+            if let range = text.range(of: prefix, options: .caseInsensitive) {
                 let valStart = range.upperBound
                 if let endIdx = text[valStart...].firstIndex(of: Character(quote)) {
                     let value = String(text[valStart..<endIdx]).trimmingCharacters(in: .whitespacesAndNewlines)

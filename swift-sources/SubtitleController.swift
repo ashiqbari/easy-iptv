@@ -65,6 +65,15 @@ final class SubtitleController: NSObject, ObservableObject {
         return value.isFinite ? min(48, max(16, value)) : 24
     }
 
+    deinit {
+        nativeDiscovery?.cancel()
+        providerDiscovery?.cancel()
+        nativeTimeout?.cancel()
+        fileSelection?.cancel()
+        let cache = fileCache
+        Task { await cache.cancel() }
+    }
+
     func reset(for item: M3UItem?) {
         generation = UUID()
         selection = UUID()
@@ -145,17 +154,18 @@ final class SubtitleController: NSObject, ObservableObject {
             appendTracks(sources.map { SubtitleTrack(id: $0.id, label: $0.label, source: .file($0)) })
         } else if providerDiscovery == nil {
             providerError = nil
+            let provider = self.provider
             providerDiscovery = Task { [weak self] in
-                guard let self else { return }
                 do {
-                    let files = try await self.provider?() ?? []
-                    guard !Task.isCancelled, self.generation == token else { return }
+                    let files = try await provider?() ?? []
+                    guard let self, !Task.isCancelled, self.generation == token else { return }
                     self.providerSources = files
                     self.appendTracks(files.map { SubtitleTrack(id: $0.id, label: $0.label, source: .file($0)) })
                 } catch {
-                    guard !Task.isCancelled, self.generation == token else { return }
+                    guard let self, !Task.isCancelled, self.generation == token else { return }
                     self.providerError = "Could not load provider subtitles. \(error.localizedDescription)"
                 }
+                guard let self, !Task.isCancelled, self.generation == token else { return }
                 self.providerDiscovery = nil
                 self.refreshDiscoveryState()
             }
@@ -167,14 +177,17 @@ final class SubtitleController: NSObject, ObservableObject {
         nativeError = nil
         nativeAttempt = UUID()
         let attempt = nativeAttempt
+        let item = avItem
+        #if os(macOS)
+        let player = vlcPlayer
+        #endif
         nativeDiscovery = Task { [weak self] in
-            guard let self else { return }
             var available: [SubtitleTrack] = []
             do {
-                if let item = self.avItem {
+                if let item {
                     let group = try await item.asset.loadMediaSelectionGroup(for: .legible)
                     try Task.checkCancellation()
-                    guard self.generation == token, self.nativeAttempt == attempt else { return }
+                    guard let self, self.generation == token, self.nativeAttempt == attempt else { return }
                     self.avGroup = group
                     available += (group?.options ?? []).enumerated().map { index, option in
                         SubtitleTrack(id: "av:\(index)", label: option.displayName, source: .av(option))
@@ -182,7 +195,7 @@ final class SubtitleController: NSObject, ObservableObject {
                     if self.selectedID == nil, let group { item.select(nil, in: group) }
                 }
                 #if os(macOS)
-                if let player = self.vlcPlayer {
+                if let player {
                     // Opening/buffering can precede discovery of the embedded tracks.
                     for _ in 0..<100 {
                         if player.isPlaying || player.state == .paused || player.state == .ended { break }
@@ -190,7 +203,7 @@ final class SubtitleController: NSObject, ObservableObject {
                         try await Task.sleep(nanoseconds: 100_000_000)
                     }
                     try Task.checkCancellation()
-                    guard self.generation == token, self.nativeAttempt == attempt else { return }
+                    guard let self, self.generation == token, self.nativeAttempt == attempt else { return }
                     guard player.isPlaying || player.state == .paused || player.state == .ended else { throw SubtitleError.discovery }
                     let names = player.videoSubTitlesNames
                     let indexes = player.videoSubTitlesIndexes
@@ -201,13 +214,14 @@ final class SubtitleController: NSObject, ObservableObject {
                 }
                 #endif
                 try Task.checkCancellation()
-                guard self.generation == token, self.nativeAttempt == attempt else { return }
+                guard let self, self.generation == token, self.nativeAttempt == attempt else { return }
                 self.appendTracks(available)
                 self.nativeTracksLoaded = true
             } catch {
-                guard !Task.isCancelled, self.generation == token, self.nativeAttempt == attempt else { return }
+                guard let self, !Task.isCancelled, self.generation == token, self.nativeAttempt == attempt else { return }
                 self.nativeError = "Could not read embedded subtitles. \(error.localizedDescription)"
             }
+            guard let self, !Task.isCancelled, self.generation == token, self.nativeAttempt == attempt else { return }
             self.nativeTimeout?.cancel()
             self.nativeTimeout = nil
             self.nativeDiscovery = nil

@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root/swift-sources"
+
+if ! command -v swift >/dev/null 2>&1; then
+    printf '%s\n' 'Commit blocked: Swift is unavailable. Install/select the Xcode toolchain.' >&2
+    exit 1
+fi
+
+printf '%s\n' 'Running all EasyIPTV tests before commit…'
+if swift test -c release; then
+    printf '%s\n' 'All tests passed. Commit may proceed.'
+else
+    result=$?
+    printf '%s\n' 'Commit blocked: tests or the test build failed.' >&2
+    exit "$result"
+fi

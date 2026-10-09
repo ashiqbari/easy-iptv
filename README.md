@@ -31,6 +31,25 @@ advertised by Xtream movie/episode metadata. M3U entries can supply a sidecar wi
 sidecar URLs show “No subtitles available”; a local file can still be loaded.
 Bitmap subtitles embedded in VLC media retain their image styling.
 
+## Tests and commit checks
+
+Run the full suite with `cd swift-sources && swift test -c release`.
+The suite includes playback/resume, subtitles, lifecycle cancellation, cache
+persistence, and pre-commit integration tests. Provider requests are mocked in
+lifecycle tests; hook tests use disposable repositories and do not commit here.
+
+Install the versioned pre-commit hook once per clone from the repository root:
+
+```sh
+./.githooks/install.sh
+```
+
+Every commit then runs the full release test suite. Failed tests, compilation
+errors, or a missing Swift toolchain block the commit. The hook does not stage
+files or create commits. It tests the working tree, so stage all intended source
+changes before committing. The installer preserves a different existing hook
+configuration instead of silently replacing it.
+
 ## Requirements
 
 - macOS 15 or later

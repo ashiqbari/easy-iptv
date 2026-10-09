@@ -86,6 +86,14 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     private var lastProgressSave = Date.distantPast
     private var playbackEndObserver: NSObjectProtocol?
     private var visiblePlayerViews: Set<UUID> = []
+    private let storageDefaults: UserDefaults
+    private let libraryLoader: LibraryLoader
+    let libraryPersistence: LibraryPersistence
+    private var libraryGeneration = UUID()
+    private var foregroundLibraryTask: Task<[M3UItem], Error>?
+    private var backgroundLibraryTask: Task<Void, Never>?
+    private var seriesLoadTask: Task<Void, Never>?
+    private var seriesGeneration = UUID()
     
     // MARK: - Published State
     
@@ -295,7 +303,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     // MARK: - Playback Properties
     
     /// The underlying native AVPlayer instance.
-    @Published public private(set) var player: AVPlayer?
+    @Published public private(set) var player: AVPlayer? {
+        didSet { cleanupPlayer = player; cleanupAsset = player?.currentItem?.asset }
+    }
+    // Stored references are accessible from nonisolated deinit; Published's
+    // computed accessors are MainActor-isolated on older Swift toolchains.
+    private var cleanupPlayer: AVPlayer?
+    private var cleanupAsset: AVAsset?
 
     /// Playback volume shared by AVPlayer and VLC (0.0 through 1.0).
     @Published public var playbackVolume: Float = UserDefaults.standard.object(forKey: "com.iptvplayer.playbackVolume") == nil
@@ -306,15 +320,14 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     #if os(macOS)
     /// VLC playback instance used for streams AVPlayer cannot decode.
-    @Published public private(set) var vlcPlayer: VLCMediaPlayer?
-    // VLCKit's stop() is asynchronous. Keep players and drawables alive until
-    // their stopped notification, even after the UI switches playback engines.
-    private var retiringVLCPlayers: [ObjectIdentifier: VLCMediaPlayer] = [:]
+    @Published public private(set) var vlcPlayer: VLCMediaPlayer? {
+        didSet { cleanupVLCPlayer = vlcPlayer }
+    }
+    private var cleanupVLCPlayer: VLCMediaPlayer?
     #endif
     
     // MARK: - Private Members
     
-    private let parser = M3UParser()
     private let xtreamManager = XtreamCodesManager()
     private var cancellables = Set<AnyCancellable>()
     private var playerItemStatusObserver: NSKeyValueObservation?
@@ -345,6 +358,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     public override init() {
         progressStore = PlaybackProgressStore()
+        storageDefaults = .standard
+        libraryLoader = LibraryLoader()
+        libraryPersistence = LibraryPersistence(url: Self.defaultCacheURL, defaults: .standard)
         super.init()
         observeProgress()
         loadPersistedState()
@@ -352,8 +368,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     /// Isolated storage and no automatic playlist playback for lifecycle tests.
-    init(progressDefaults: UserDefaults) {
+    init(progressDefaults: UserDefaults, libraryLoader: LibraryLoader = LibraryLoader(), cacheURL: URL? = nil) {
         progressStore = PlaybackProgressStore(defaults: progressDefaults)
+        storageDefaults = progressDefaults
+        self.libraryLoader = libraryLoader
+        libraryPersistence = LibraryPersistence(url: cacheURL ?? FileManager.default.temporaryDirectory
+            .appendingPathComponent("EasyIPTVTests-\(UUID())/cached_channels.json"), defaults: progressDefaults)
         super.init()
         observeProgress()
     }
@@ -363,7 +383,21 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     deinit {
+        foregroundLibraryTask?.cancel()
+        backgroundLibraryTask?.cancel()
+        seriesLoadTask?.cancel()
+        controlsTimer?.cancel()
+        resumeTimeoutTask?.cancel()
+        libraryPersistence.invalidatePendingWrites()
+        cleanupPlayer?.pause()
+        cleanupPlayer?.currentItem?.cancelPendingSeeks()
+        cleanupAsset?.cancelLoading()
+        if let token = timeObserverToken { cleanupPlayer?.removeTimeObserver(token) }
+        cleanupPlayer?.replaceCurrentItem(with: nil)
         #if os(macOS)
+        if let vlcPlayer = cleanupVLCPlayer {
+            Task { @MainActor in VLCPlaybackRetirement.shared.retire(vlcPlayer) }
+        }
         sleepManager.disable()
         #endif
         playerItemStatusObserver?.invalidate()
@@ -423,6 +457,21 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     // MARK: - Playlist Loading
+
+    private func beginLibraryLoad() -> UUID {
+        foregroundLibraryTask?.cancel()
+        backgroundLibraryTask?.cancel()
+        libraryPersistence.invalidatePendingWrites()
+        libraryGeneration = UUID()
+        return libraryGeneration
+    }
+
+    private func acceptLibraryResponse(_ generation: UUID) -> Bool {
+        guard libraryGeneration == generation else { return false }
+        foregroundLibraryTask = nil
+        guard !Task.isCancelled else { isLoading = false; return false }
+        return true
+    }
     
     /// Fetches and parses an M3U/M3U8 playlist from a web URL.
     /// - Parameter urlString: Remote HTTP/HTTPS URL string.
@@ -433,12 +482,19 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             return
         }
         
+        let generation = beginLibraryLoad()
+        let loader = libraryLoader
+        let task = Task { try await loader.playlist(url) }
+        foregroundLibraryTask = task
         self.isLoading = true
         self.errorMessage = nil
         self.playlistURLString = urlString
         
         do {
-            let parsedChannels = try await parser.parse(from: url)
+            let parsedChannels = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
+            guard acceptLibraryResponse(generation) else { return }
             
             // Map favorites onto newly parsed channels
             self.channels = parsedChannels.map { item in
@@ -450,7 +506,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             self.reindexCategoriesAndChannels()
             
             // Persist the successfully loaded playlist URL and cached channels to disk
-            UserDefaults.standard.set(urlString, forKey: lastPlaylistKey)
+            storageDefaults.set(urlString, forKey: lastPlaylistKey)
             self.persistLoadedChannels()
             self.isLoading = false
             
@@ -459,6 +515,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 self.playChannel(first)
             }
         } catch {
+            guard acceptLibraryResponse(generation) else { return }
             self.isLoading = false
             self.errorMessage = error.localizedDescription
         }
@@ -470,13 +527,20 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     ///   - username: User account username.
     ///   - password: User account password.
     public func loadXtream(serverURL: String, username: String, password: String) async {
+        let generation = beginLibraryLoad()
+        let loader = libraryLoader
+        let task = Task { try await loader.live(serverURL, username, password) }
+        foregroundLibraryTask = task
         self.isLoading = true
         self.errorMessage = nil
         self.playlistURLString = "Xtream: \(username)"
         
         do {
             // Step 1: Immediately fetch Live Channels so user can watch without 30s delay
-            let live = try await xtreamManager.fetchLiveChannels(serverURL: serverURL, username: username, password: password)
+            let live = try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: { task.cancel() }
+            guard acceptLibraryResponse(generation) else { return }
             let mappedLive = live.map { item in
                 var updated = item
                 updated.isFavorite = self.favoriteStreamURLs.contains(item.streamURL.absoluteString)
@@ -490,7 +554,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             self.persistLoadedChannels()
             
             // Save Xtream account info so user does not need to re-enter
-            UserDefaults.standard.set([
+            storageDefaults.set([
                 "server": serverURL,
                 "username": username,
                 "password": password
@@ -503,11 +567,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             }
             
             // Step 2: Concurrently fetch VOD movies and Series in background
-            Task { [weak self] in
-                guard let self = self else { return }
-                async let movies = (try? self.xtreamManager.fetchVodStreams(serverURL: serverURL, username: username, password: password)) ?? []
-                async let series = (try? self.xtreamManager.fetchSeries(serverURL: serverURL, username: username, password: password)) ?? []
+            backgroundLibraryTask = Task { [weak self] in
+                async let movies = (try? loader.movies(serverURL, username, password)) ?? []
+                async let series = (try? loader.series(serverURL, username, password)) ?? []
                 let additional = await (movies + series)
+                guard let self, !Task.isCancelled, self.libraryGeneration == generation else { return }
                 if !additional.isEmpty {
                     let mappedAdditional = additional.map { item in
                         var updated = item
@@ -518,8 +582,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                     self.reindexCategoriesAndChannels()
                     self.persistLoadedChannels()
                 }
+                self.backgroundLibraryTask = nil
             }
         } catch {
+            guard acceptLibraryResponse(generation) else { return }
             self.isLoading = false
             self.errorMessage = error.localizedDescription
         }
@@ -708,18 +774,18 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             useVLCPlayback = false
             return
         }
-        retiringVLCPlayers[ObjectIdentifier(previous)] = previous
-        previous.audio?.volume = 0
-        previous.pause()
+        VLCPlaybackRetirement.shared.retire(previous)
         vlcPlayer = nil
         useVLCPlayback = false
-        previous.stop()
     }
     #endif
     
     /// Queries the Xtream server for a TV show's seasons and episodes,
     /// stops playback, and presents the rich Series Overview & Episodes grid first.
     public func fetchAndShowSeries(_ item: M3UItem) {
+        seriesLoadTask?.cancel()
+        seriesGeneration = UUID()
+        let generation = seriesGeneration
         tearDownPlayback()
         resumeRequest = nil
         seriesOverviewItem = item
@@ -745,25 +811,29 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         let user = self.xtreamUsername
         let pass = self.xtreamPassword
         
-        Task { [weak self] in
-            guard let self = self else { return }
+        let service = xtreamManager
+        seriesLoadTask = Task { [weak self] in
             do {
-                let eps = try await self.xtreamManager.fetchSeriesEpisodes(
+                let eps = try await service.fetchSeriesEpisodes(
                     serverURL: server,
                     username: user,
                     password: pass,
                     seriesId: seriesId
                 )
-                guard self.seriesOverviewItem?.id == item.id else { return }
+                guard let self, !Task.isCancelled, self.seriesGeneration == generation,
+                      self.seriesOverviewItem?.id == item.id else { return }
                 self.seriesEpisodes = eps
                 self.isLoadingEpisodes = false
             } catch {
-                guard self.seriesOverviewItem?.id == item.id else { return }
+                guard let self, !Task.isCancelled, self.seriesGeneration == generation,
+                      self.seriesOverviewItem?.id == item.id else { return }
                 self.isLoadingEpisodes = false
                 if self.seriesEpisodes.isEmpty {
                     self.seriesEpisodes = [item]
                 }
             }
+            guard let self, self.seriesGeneration == generation else { return }
+            self.seriesLoadTask = nil
         }
     }
     
@@ -811,6 +881,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         resumeTimeoutTask = nil
         controlsTimer?.cancel()
         player?.pause()
+        player?.currentItem?.cancelPendingSeeks()
+        player?.currentItem?.asset.cancelLoading()
         removeTimeObserver()
         playerItemStatusObserver?.invalidate()
         playerItemStatusObserver = nil
@@ -857,10 +929,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Re-syncs and refreshes the current Xtream Codes server or M3U playlist to fetch updated channels.
     public func refreshPlaylist() async {
-        if let saved = UserDefaults.standard.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String],
+        if let saved = storageDefaults.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String],
            let server = saved["server"], let user = saved["username"], let pass = saved["password"], !server.isEmpty {
             await loadXtream(serverURL: server, username: user, password: pass)
-        } else if let savedURL = UserDefaults.standard.string(forKey: lastPlaylistKey), !savedURL.isEmpty {
+        } else if let savedURL = storageDefaults.string(forKey: lastPlaylistKey), !savedURL.isEmpty {
             await loadPlaylist(from: savedURL)
         }
     }
@@ -975,7 +1047,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #endif
 
     private func applyPlaybackVolume() {
-        UserDefaults.standard.set(playbackVolume, forKey: "com.iptvplayer.playbackVolume")
+        storageDefaults.set(playbackVolume, forKey: "com.iptvplayer.playbackVolume")
         player?.volume = playbackVolume
         #if os(macOS)
         vlcPlayer?.audio?.volume = pendingResumePosition == nil ? Int32((playbackVolume * 100).rounded()) : 0
@@ -1011,6 +1083,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Stops playback and releases the current player item.
     public func stop() {
+        seriesLoadTask?.cancel()
+        seriesLoadTask = nil
+        seriesGeneration = UUID()
+        isLoadingEpisodes = false
         tearDownPlayback()
         resumeRequest = nil
         seriesOverviewItem = nil
@@ -1222,36 +1298,25 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         #endif
     }
     
-    private var cachedChannelsURL: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("EasyIPTV", isDirectory: true)
-        try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        return appSupport.appendingPathComponent("cached_channels.json")
+    private static var defaultCacheURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("EasyIPTV/cached_channels.json")
     }
+
+    private var cachedChannelsURL: URL { libraryPersistence.url }
     
     private func persistLoadedChannels() {
-        let currentChannels = self.channels
-        let currentURLString = self.playlistURLString
-        let url = cachedChannelsURL
-        Task.detached(priority: .background) {
-            do {
-                let data = try JSONEncoder().encode(currentChannels)
-                try data.write(to: url, options: .atomic)
-                UserDefaults.standard.set(currentURLString, forKey: "com.iptvplayer.lastPlaylistURL")
-            } catch {
-                print("Failed to save channels to disk: \(error)")
-            }
-        }
+        libraryPersistence.save(channels: channels, source: playlistURLString)
     }
     
     private func loadPersistedState() {
-        if let savedFavorites = UserDefaults.standard.stringArray(forKey: favoritesKey) {
+        if let savedFavorites = storageDefaults.stringArray(forKey: favoritesKey) {
             self.favoriteStreamURLs = Set(savedFavorites)
         }
-        if let lastURL = UserDefaults.standard.string(forKey: lastPlaylistKey), !lastURL.isEmpty {
+        if let lastURL = storageDefaults.string(forKey: lastPlaylistKey), !lastURL.isEmpty {
             self.playlistURLString = lastURL
         }
-        if let savedXtream = UserDefaults.standard.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String] {
+        if let savedXtream = storageDefaults.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String] {
             self.xtreamServerURL = savedXtream["server"] ?? ""
             self.xtreamUsername = savedXtream["username"] ?? ""
             self.xtreamPassword = savedXtream["password"] ?? ""
@@ -1282,18 +1347,21 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Clears all loaded channels, resets player, and removes cached files from disk.
     public func clearAllData() {
+        _ = beginLibraryLoad()
+        foregroundLibraryTask = nil
+        backgroundLibraryTask = nil
+        isLoading = false
         self.stop()
         self.channels = []
         self.currentChannel = nil
         self.playlistURLString = ""
         self.reindexCategoriesAndChannels()
-        try? FileManager.default.removeItem(at: cachedChannelsURL)
-        UserDefaults.standard.removeObject(forKey: lastPlaylistKey)
-        UserDefaults.standard.removeObject(forKey: "com.iptvplayer.savedXtream")
+        libraryPersistence.clear()
+        storageDefaults.removeObject(forKey: "com.iptvplayer.savedXtream")
     }
     
     private func persistFavorites() {
-        UserDefaults.standard.set(Array(favoriteStreamURLs), forKey: favoritesKey)
+        storageDefaults.set(Array(favoriteStreamURLs), forKey: favoritesKey)
     }
 }
 
@@ -1323,15 +1391,6 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
         let playing = player.isPlaying
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let identity = ObjectIdentifier(player)
-            if self.retiringVLCPlayers[identity] != nil {
-                if state == .stopped {
-                    player.delegate = nil
-                    player.drawable = nil
-                    self.retiringVLCPlayers.removeValue(forKey: identity)
-                }
-                return
-            }
             guard self.vlcPlayer === player else { return }
             self.isPlaying = self.wantsPlayback && playing
             self.isBuffering = self.wantsPlayback && (state == .opening || (state == .buffering && !playing))
