@@ -26,7 +26,11 @@ struct LibraryPaneLayout {
     }
 
     static func playbackFrame(fullscreen: Bool, containerSize: CGSize, detailBounds: CGRect?) -> CGRect {
-        fullscreen ? CGRect(origin: .zero, size: containerSize) : (detailBounds ?? .zero)
+        let container = CGRect(origin: .zero, size: containerSize)
+        if fullscreen { return container }
+        // Native split columns can include titlebar height beyond the visible content area.
+        let visible = (detailBounds ?? .zero).intersection(container)
+        return visible.isNull ? .zero : visible
     }
 }
 #endif

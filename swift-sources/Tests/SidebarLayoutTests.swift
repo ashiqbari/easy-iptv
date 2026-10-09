@@ -30,6 +30,23 @@ final class SidebarLayoutTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testBottomControlsUseMultipleRowsInsteadOfScrollingWhenNarrow() {
+        for type in [M3UItem.ContentType.movie, .series] {
+            let manager = manager()
+            let item = M3UItem(name: "Controls fixture", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-sidebar-fixture.mp4"), contentType: type)
+            manager.playDirectStream(item)
+            if type == .series { manager.seriesEpisodes = [item] }
+            manager.player?.replaceCurrentItem(with: nil)
+            defer { manager.stop() }
+            let hosting = NSHostingController(rootView: IPTVPlaybackView(manager: manager).bottomBar)
+            let narrow = hosting.sizeThatFits(in: CGSize(width: 248, height: 600))
+            let wide = hosting.sizeThatFits(in: CGSize(width: 1000, height: 600))
+            XCTAssertLessThanOrEqual(narrow.width, 248)
+            XCTAssertGreaterThan(narrow.height, wide.height + 30)
+            XCTAssertGreaterThanOrEqual(wide.height, 44)
+        }
+    }
+
     func testChannelToggleKeepsTheMountedVideoSurface() async throws {
         try await checkMountedVideoSurface(useVLC: false)
     }
@@ -62,6 +79,7 @@ final class SidebarLayoutTests: XCTestCase {
         try await settle()
         let original = try XCTUnwrap(surface(in: hosting))
         XCTAssertGreaterThan(original.bounds.width, 0)
+        XCTAssertLessThanOrEqual(original.convert(original.bounds, to: hosting).maxY, hosting.bounds.maxY)
         for _ in 0..<4 {
             manager.toggleChannelsSidebar()
             try await settle()
@@ -70,6 +88,7 @@ final class SidebarLayoutTests: XCTestCase {
             XCTAssertTrue(current.window === window)
             XCTAssertGreaterThan(current.bounds.width, 0)
             XCTAssertGreaterThan(current.bounds.height, 0)
+            XCTAssertLessThanOrEqual(current.convert(current.bounds, to: hosting).maxY, hosting.bounds.maxY)
         }
     }
 
@@ -97,6 +116,16 @@ final class SidebarLayoutTests: XCTestCase {
         let detail = CGRect(x: 700, y: 0, width: 620, height: 820)
         XCTAssertEqual(LibraryPaneLayout.playbackFrame(fullscreen: false, containerSize: size, detailBounds: detail), detail)
         XCTAssertEqual(LibraryPaneLayout.playbackFrame(fullscreen: true, containerSize: size, detailBounds: detail), CGRect(origin: .zero, size: size))
+    }
+
+    func testNormalWindowClampsTitlebarOverflowAndOffscreenBounds() {
+        let size = CGSize(width: 1320, height: 800)
+        XCTAssertEqual(LibraryPaneLayout.playbackFrame(fullscreen: false, containerSize: size,
+                       detailBounds: CGRect(x: 701, y: 52, width: 619, height: 800)),
+                       CGRect(x: 701, y: 52, width: 619, height: 748))
+        XCTAssertEqual(LibraryPaneLayout.playbackFrame(fullscreen: false, containerSize: size, detailBounds: .zero), .zero)
+        XCTAssertEqual(LibraryPaneLayout.playbackFrame(fullscreen: false, containerSize: size,
+                       detailBounds: CGRect(x: 1500, y: 0, width: 100, height: 100)), .zero)
     }
     #endif
 

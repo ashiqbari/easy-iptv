@@ -419,7 +419,7 @@ public struct IPTVPlaybackView: View {
     }
     
     /// Bottom status bar showing stream format, timeline scrubber, and action buttons.
-    private var bottomBar: some View {
+    var bottomBar: some View {
         VStack(spacing: 8) {
             // VOD Scrubber Timeline (for MP4 movies and TV series)
             if let channel = manager.currentChannel, channel.isVOD {
@@ -454,115 +454,142 @@ public struct IPTVPlaybackView: View {
                 }
             }
             
-            GeometryReader { geometry in
-                ScrollView(.horizontal, showsIndicators: false) {
-                    bottomActions
-                        .frame(minWidth: geometry.size.width)
+            ViewThatFits(in: .horizontal) {
+                bottomActions.fixedSize(horizontal: true, vertical: false)
+                VStack(alignment: .leading, spacing: 8) {
+                    streamStatus
+                    HStack {
+                        episodeAndSubtitleControls
+                        Spacer(minLength: 0)
+                    }
+                    HStack(spacing: 4) {
+                        volumeControls
+                        Spacer(minLength: 0)
+                        playbackActions.labelStyle(.iconOnly)
+                    }
                 }
             }
-            .frame(height: 44)
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
-    /// Keep every control reachable when the video pane or mobile screen is narrow.
     private var bottomActions: some View {
-            HStack {
-                if let channel = manager.currentChannel {
-                    HStack(spacing: 8) {
-                        Image(systemName: channel.isVOD ? "film.fill" : "antenna.radiowaves.left.and.right")
-                            .foregroundColor(channel.isVOD ? .purple : .green)
-                        Text(channel.isVOD ? "MP4 Video Stream" : (channel.isHLS ? "Apple HLS (m3u8)" : "Direct Stream"))
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.8))
-                    }
-                }
-                
-                Spacer()
-                
-                // Series Episodes Selector Button (Only shown when active channel is a TV Series)
-                if manager.currentChannel?.contentType == .series && !manager.seriesEpisodes.isEmpty {
-                    Button {
-                        manager.showingEpisodesDrawer.toggle()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "list.number")
-                            Text("Episodes (\(manager.seriesEpisodes.count))")
-                        }
-                        .font(.caption.bold())
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.purple.opacity(0.85))
-                        .cornerRadius(6)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Browse & Play TV Series Episodes")
-                }
-
-                if manager.currentChannel?.isVOD == true {
-                    SubtitleControls(manager: manager, controller: manager.subtitles)
-                }
-
-                HStack(spacing: 8) {
-                    Image(systemName: manager.playbackVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                        .foregroundColor(.white)
-                        .accessibilityHidden(true)
-                    Slider(
-                        value: Binding(
-                            get: { Double(manager.playbackVolume) },
-                            set: { manager.playbackVolume = Float($0) }
-                        ),
-                        in: 0...1,
-                        onEditingChanged: { editing in
-                            if editing {
-                                manager.cancelControlsAutoHide()
-                            } else {
-                                manager.scheduleControlsAutoHide()
-                            }
-                        }
-                    )
-                    .tint(.white)
-                    .frame(width: 100)
-                    .accessibilityLabel("Playback volume")
-                    Text("\(Int((manager.playbackVolume * 100).rounded()))%")
-                        .font(.caption.monospacedDigit())
-                        .foregroundColor(.white)
-                        .frame(minWidth: 36, alignment: .trailing)
-                        .help("Playback volume")
-                }
-                .help("Playback volume")
-                
-                // Full Screen Toggle Button
-                Button {
-                    manager.toggleFullscreen()
-                } label: {
-                    Label(manager.isFullscreen ? "Exit Full Screen" : "Full Screen", systemImage: manager.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .font(.caption.bold())
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.2))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
-                .help(manager.isFullscreen ? "Exit Full Screen (F)" : "Make Full Screen (F)")
-                
-                // Stop button
-                Button {
-                    manager.stop()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill")
-                        .font(.caption.bold())
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.red.opacity(0.6))
-                        .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
-            }
+        HStack {
+            streamStatus
+            Spacer()
+            episodeAndSubtitleControls
+            volumeControls
+            playbackActions
+        }
     }
-    
+
+    @ViewBuilder
+    private var streamStatus: some View {
+        if let channel = manager.currentChannel {
+            HStack(spacing: 8) {
+                Image(systemName: channel.isVOD ? "film.fill" : "antenna.radiowaves.left.and.right")
+                    .foregroundColor(channel.isVOD ? .purple : .green)
+                Text(channel.isVOD ? "MP4 Video Stream" : (channel.isHLS ? "Apple HLS (m3u8)" : "Direct Stream"))
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.8))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var episodeAndSubtitleControls: some View {
+        // Series Episodes Selector Button (Only shown when active channel is a TV Series)
+        if manager.currentChannel?.contentType == .series && !manager.seriesEpisodes.isEmpty {
+            Button {
+                manager.showingEpisodesDrawer.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "list.number")
+                    Text("Episodes (\(manager.seriesEpisodes.count))")
+                }
+                .font(.caption.bold())
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.purple.opacity(0.85))
+                .cornerRadius(6)
+            }
+            .buttonStyle(.plain)
+            .help("Browse & Play TV Series Episodes")
+        }
+
+        if manager.currentChannel?.isVOD == true {
+            SubtitleControls(manager: manager, controller: manager.subtitles)
+        }
+    }
+
+    private var volumeControls: some View {
+        HStack(spacing: 8) {
+            Image(systemName: manager.playbackVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .foregroundColor(.white)
+                .accessibilityHidden(true)
+            Slider(
+                value: Binding(
+                    get: { Double(manager.playbackVolume) },
+                    set: { manager.playbackVolume = Float($0) }
+                ),
+                in: 0...1,
+                onEditingChanged: { editing in
+                    if editing {
+                        manager.cancelControlsAutoHide()
+                    } else {
+                        manager.scheduleControlsAutoHide()
+                    }
+                }
+            )
+            .tint(.white)
+            .frame(width: 100)
+            .accessibilityLabel("Playback volume")
+            Text("\(Int((manager.playbackVolume * 100).rounded()))%")
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.white)
+                .frame(minWidth: 36, alignment: .trailing)
+                .help("Playback volume")
+        }
+        .help("Playback volume")
+    }
+
+    @ViewBuilder
+    private var playbackActions: some View {
+        // Full Screen Toggle Button
+        Button {
+            manager.toggleFullscreen()
+        } label: {
+            Label(
+                manager.isFullscreen ? "Exit Full Screen" : "Full Screen",
+                systemImage: manager.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"
+            )
+            .font(.caption.bold())
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.2))
+            .cornerRadius(6)
+        }
+        .buttonStyle(.plain)
+        .help(manager.isFullscreen ? "Exit Full Screen (F)" : "Make Full Screen (F)")
+
+        // Stop button
+        Button {
+            manager.stop()
+        } label: {
+            Label("Stop", systemImage: "stop.fill")
+                .font(.caption.bold())
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.red.opacity(0.6))
+                .cornerRadius(6)
+        }
+        .buttonStyle(.plain)
+        .help("Stop playback")
+    }
+
     private var fallbackLogo: some View {
         Image(systemName: "tv")
             .foregroundColor(.white)
