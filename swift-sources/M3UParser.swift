@@ -73,10 +73,16 @@ public actor M3UParser {
         var items: [M3UItem] = []
         items.reserveCapacity(4000)
         var pendingExtInf: String? = nil
+        var guideURL: URL?
         
         content.enumerateLines { rawLine, _ in
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if line.isEmpty {
+                return
+            }
+            if line.hasPrefix("#EXTM3U") {
+                guideURL = (Self.extractAttribute(named: "url-tvg", from: line)
+                    ?? Self.extractAttribute(named: "x-tvg-url", from: line)).flatMap { URL(string: $0) }
                 return
             }
             
@@ -94,7 +100,7 @@ public actor M3UParser {
             if let extInf = pendingExtInf {
                 let cleanURLString = line.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? line
                 if let streamURL = URL(string: line) ?? URL(string: cleanURLString) {
-                    let parsedItem = Self.parseExtInf(extInf: extInf, streamURL: streamURL)
+                    let parsedItem = Self.parseExtInf(extInf: extInf, streamURL: streamURL, guideURL: guideURL)
                     items.append(parsedItem)
                 }
                 pendingExtInf = nil
@@ -111,7 +117,7 @@ public actor M3UParser {
     // MARK: - Private Parser Core
     
     /// Extracts metadata fields (`tvg-name`, `group-title`, `tvg-logo`, channel title) from a single `#EXTINF` line.
-    private static func parseExtInf(extInf: String, streamURL: URL) -> M3UItem {
+    private static func parseExtInf(extInf: String, streamURL: URL, guideURL: URL?) -> M3UItem {
         let tvgName = extractAttribute(named: "tvg-name", from: extInf)
         let tvgID = extractAttribute(named: "tvg-id", from: extInf)
         let groupTitle = extractAttribute(named: "group-title", from: extInf) ?? "General"
@@ -153,7 +159,8 @@ public actor M3UParser {
             isFavorite: false,
             subtitleSources: extractAttribute(named: "subtitle-url", from: extInf)
                 .flatMap { URL(string: $0, relativeTo: streamURL)?.absoluteURL }
-                .map { [SubtitleSource(url: $0, label: extractAttribute(named: "subtitle-language", from: extInf) ?? "Subtitles")] }
+                .map { [SubtitleSource(url: $0, label: extractAttribute(named: "subtitle-language", from: extInf) ?? "Subtitles")] },
+            guideURL: guideURL
         )
     }
     

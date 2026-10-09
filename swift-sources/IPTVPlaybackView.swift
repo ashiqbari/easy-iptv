@@ -1217,42 +1217,13 @@ public struct NativeEPGSheetView: View {
         self.manager = manager
     }
     
-    private struct ProgramItem: Identifiable {
-        let id = UUID()
-        let title: String
-        let timeRange: String
-        let description: String
-        let durationMin: Int
-        let isCurrent: Bool
-        let progressPct: Double
-    }
-    
-    private var programs: [ProgramItem] {
-        let name = channel.name.lowercased()
-        let group = channel.groupTitle.lowercased()
-        
-        if name.contains("sport") || group.contains("sport") || name.contains("espn") || name.contains("bein") {
-            return [
-                ProgramItem(title: "Live Matchday: Pre-Game Tactical Analysis", timeRange: "14:00 – 15:00", description: "Expert studio panel, starting lineups, pitchside updates, and form guides.", durationMin: 60, isCurrent: true, progressPct: 0.65),
-                ProgramItem(title: "Championship League: Live Match Broadcast", timeRange: "15:00 – 17:00", description: "Full live coverage in 4K UHD with multi-angle tactical commentary and VAR replays.", durationMin: 120, isCurrent: false, progressPct: 0.0),
-                ProgramItem(title: "Post-Match Analysis & Manager Press Conferences", timeRange: "17:00 – 18:00", description: "Direct reactions, player ratings, headline interviews, and goals of the day.", durationMin: 60, isCurrent: false, progressPct: 0.0),
-                ProgramItem(title: "World Sports Highlights & League Roundup", timeRange: "18:00 – 19:00", description: "Comprehensive global recap of international football and championship fixtures.", durationMin: 60, isCurrent: false, progressPct: 0.0)
-            ]
-        } else if name.contains("news") || group.contains("news") || name.contains("bbc") || name.contains("cnn") {
-            return [
-                ProgramItem(title: "Global Breaking News & Top Headlines", timeRange: "14:00 – 15:00", description: "Live international news coverage, diplomatic developments, and financial markets.", durationMin: 60, isCurrent: true, progressPct: 0.45),
-                ProgramItem(title: "World Business Today & Wall Street Review", timeRange: "15:00 – 15:30", description: "Global commodities, stock exchange indices, technology trends, and economic reports.", durationMin: 30, isCurrent: false, progressPct: 0.0),
-                ProgramItem(title: "The World Briefing with Live Correspondents", timeRange: "15:30 – 16:30", description: "Dispatches and analysis from European, Asian, and American news bureaus.", durationMin: 60, isCurrent: false, progressPct: 0.0),
-                ProgramItem(title: "Special Investigation: Climate & Global Tech", timeRange: "16:30 – 17:30", description: "Investigative documentary into emerging technological breakthroughs and science.", durationMin: 60, isCurrent: false, progressPct: 0.0)
-            ]
-        } else {
-            return [
-                ProgramItem(title: "Prime Time Showcase: Live Broadcast Feature", timeRange: "14:00 – 15:30", description: "Special flagship studio program with live guests, performances, and audience discussion.", durationMin: 90, isCurrent: true, progressPct: 0.55),
-                ProgramItem(title: "Evening Edition: Culture, Cinema & Arts", timeRange: "15:30 – 17:00", description: "Exploring new cinematic releases, stage productions, and international arts festivals.", durationMin: 90, isCurrent: false, progressPct: 0.0),
-                ProgramItem(title: "Late Night Variety Show: Entertainment & Music", timeRange: "17:00 – 18:30", description: "Celebrity interviews, comedy monologues, musical performances, and games.", durationMin: 90, isCurrent: false, progressPct: 0.0)
-            ]
-        }
-    }
+    @State private var programs: [GuideProgram] = []
+    @State private var isLoading = true
+    @State private var guideError: String?
+    @State private var now = Date()
+    @State private var reload = 0
+    private let guide = TVGuide()
+    private var remainingPrograms: [GuideProgram] { TVGuide.remainingToday(programs, now: now) }
     
     public var body: some View {
         NavigationStack {
@@ -1303,7 +1274,20 @@ public struct NativeEPGSheetView: View {
                             .padding(.horizontal, 20)
                         
                         // ON AIR NOW FEATURE CARD
-                        if let current = programs.first(where: { $0.isCurrent }) {
+                        if isLoading {
+                            ProgressView("Loading TV guide…").padding(20)
+                        } else if let guideError {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(guideError)
+                                Button("Retry") { reload += 1 }
+                            }
+                            .padding(20)
+                        } else if remainingPrograms.isEmpty {
+                            Text("No TV guide available for the rest of today on this channel.")
+                                .foregroundStyle(.secondary)
+                                .padding(20)
+                        }
+                        if let current = remainingPrograms.first(where: { $0.isCurrent(at: now) }) {
                             VStack(alignment: .leading, spacing: 10) {
                                 HStack {
                                     Text("ON AIR NOW")
@@ -1337,13 +1321,13 @@ public struct NativeEPGSheetView: View {
                                                 .fill(Color.white.opacity(0.15))
                                             RoundedRectangle(cornerRadius: 3)
                                                 .fill(Color.blue)
-                                                .frame(width: geo.size.width * CGFloat(current.progressPct))
+                                                .frame(width: geo.size.width * CGFloat(current.progress(at: now)))
                                         }
                                     }
                                     .frame(height: 6)
                                     
                                     HStack {
-                                        Text("\(Int(current.progressPct * 100))% elapsed")
+                                        Text("\(Int(current.progress(at: now) * 100))% elapsed")
                                             .font(.caption2)
                                             .foregroundColor(.blue)
                                         Spacer()
@@ -1366,15 +1350,15 @@ public struct NativeEPGSheetView: View {
                         
                         // TODAY'S SCHEDULE
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Today's Schedule")
+                            Text("Rest of today's schedule")
                                 .font(.headline.bold())
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 20)
                             
                             VStack(spacing: 8) {
-                                ForEach(programs) { item in
+                                ForEach(remainingPrograms) { item in
                                     HStack(alignment: .top, spacing: 14) {
-                                        Text(item.timeRange.components(separatedBy: " – ").first ?? "")
+                                        Text(item.start.formatted(date: .omitted, time: .shortened))
                                             .font(.caption.bold().monospacedDigit())
                                             .foregroundColor(.white)
                                             .padding(.horizontal, 8)
@@ -1388,7 +1372,7 @@ public struct NativeEPGSheetView: View {
                                                 Text(item.title)
                                                     .font(.subheadline.weight(.semibold))
                                                     .foregroundColor(.white)
-                                                if item.isCurrent {
+                                                if item.isCurrent(at: now) {
                                                     Text("NOW")
                                                         .font(.system(size: 9, weight: .bold))
                                                         .foregroundColor(.white)
@@ -1407,10 +1391,11 @@ public struct NativeEPGSheetView: View {
                                                 .font(.caption)
                                                 .foregroundColor(.white.opacity(0.7))
                                                 .lineLimit(2)
+                                            Text(item.timeRange).font(.caption2).foregroundStyle(.secondary)
                                         }
                                     }
                                     .padding(12)
-                                    .background(Color.white.opacity(item.isCurrent ? 0.08 : 0.03))
+                                    .background(Color.white.opacity(item.isCurrent(at: now) ? 0.08 : 0.03))
                                     .cornerRadius(8)
                                 }
                             }
@@ -1440,6 +1425,21 @@ public struct NativeEPGSheetView: View {
             #endif
         }
         .frame(minWidth: 500, minHeight: 450)
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
+        .task(id: "\(channel.subtitleCacheKey)|\(reload)|\(Calendar.current.startOfDay(for: now).timeIntervalSince1970)") {
+            isLoading = true
+            guideError = nil
+            programs = []
+            do {
+                let result = try await guide.load(for: channel)
+                try Task.checkCancellation()
+                programs = result
+            } catch {
+                guard !Task.isCancelled else { return }
+                guideError = (error as? GuideError)?.localizedDescription ?? "Could not load the TV guide. Please try again."
+            }
+            isLoading = false
+        }
     }
     
     private var epgLogoFallback: some View {
