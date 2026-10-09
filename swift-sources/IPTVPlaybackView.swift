@@ -17,6 +17,7 @@ import VLC
 public struct IPTVPlaybackView: View {
     
     @ObservedObject var manager: IPTVPlayerManager
+    @State private var visibilityID = UUID()
     
     public init(manager: IPTVPlayerManager) {
         self.manager = manager
@@ -69,8 +70,10 @@ public struct IPTVPlaybackView: View {
             }
         }
         .onAppear {
+            manager.playerViewAppeared(visibilityID)
             manager.scheduleControlsAutoHide()
         }
+        .onDisappear { manager.playerViewDisappeared(visibilityID) }
         // macOS keyboard shortcuts (macOS 15+)
         #if os(macOS)
         .background {
@@ -171,8 +174,7 @@ public struct IPTVPlaybackView: View {
                 // Return to TV Series Overview Button
                 if channel.contentType == .series || manager.selectedSection == .series {
                     Button {
-                        manager.player?.pause()
-                        manager.isViewingSeriesDetails = true
+                        manager.returnToSeries()
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "chevron.left.circle.fill")
@@ -240,7 +242,7 @@ public struct IPTVPlaybackView: View {
                 // TV Series Episodes & Seasons Overview Button
                 if channel.contentType == .series {
                     Button {
-                        manager.isViewingSeriesDetails = true
+                        manager.returnToSeries()
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "square.grid.2x2.fill")
@@ -746,8 +748,9 @@ public struct IPTVPlaybackView: View {
                                 
                                 HStack(spacing: 12) {
                                     Button {
-                                        if let first = manager.seriesEpisodes.first {
-                                            manager.isViewingSeriesDetails = false
+                                        if let episode = manager.continueWatchingEpisode {
+                                            manager.continueWatching(episode)
+                                        } else if let first = manager.seriesEpisodes.first {
                                             manager.playDirectStream(first)
                                         }
                                     } label: {
@@ -755,9 +758,9 @@ public struct IPTVPlaybackView: View {
                                             Image(systemName: "play.fill")
                                                 .font(.body)
                                             VStack(alignment: .leading, spacing: 1) {
-                                                Text("Play first episode")
+                                                Text(manager.continueWatchingEpisode == nil ? "Play first episode" : "Continue watching")
                                                     .font(.subheadline.bold())
-                                                Text(manager.seriesEpisodes.first?.name ?? "Season 1 • Episode 1")
+                                                Text(manager.continueWatchingEpisode?.name ?? manager.seriesEpisodes.first?.name ?? "Season 1 • Episode 1")
                                                     .font(.caption2)
                                                     .foregroundColor(.black.opacity(0.7))
                                                     .lineLimit(1)
@@ -772,7 +775,7 @@ public struct IPTVPlaybackView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .disabled(manager.seriesEpisodes.isEmpty)
-                                    
+
                                     Button {
                                         manager.toggleFavorite(channel)
                                     } label: {
@@ -900,7 +903,6 @@ public struct IPTVPlaybackView: View {
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 16)], spacing: 16) {
                                     ForEach(Array(manager.filteredEpisodesForSelectedSeason.enumerated()), id: \.element.id) { index, ep in
                                         Button {
-                                            manager.isViewingSeriesDetails = false
                                             manager.playDirectStream(ep)
                                         } label: {
                                             VStack(alignment: .leading, spacing: 8) {
@@ -925,6 +927,7 @@ public struct IPTVPlaybackView: View {
                                                 Text(ep.groupTitle)
                                                     .font(.caption2)
                                                     .foregroundColor(.gray)
+                                                EpisodeProgressView(store: manager.progressStore, item: ep)
                                             }
                                             .padding(8)
                                             .background(Color.white.opacity(0.05))
@@ -942,7 +945,6 @@ public struct IPTVPlaybackView: View {
                                         LazyHStack(spacing: 16) {
                                             ForEach(Array(manager.filteredEpisodesForSelectedSeason.enumerated()), id: \.element.id) { index, ep in
                                                 Button {
-                                                    manager.isViewingSeriesDetails = false
                                                     manager.playDirectStream(ep)
                                                 } label: {
                                                     VStack(alignment: .leading, spacing: 8) {
@@ -969,6 +971,8 @@ public struct IPTVPlaybackView: View {
                                                         Text(ep.groupTitle)
                                                             .font(.caption2)
                                                             .foregroundColor(.gray)
+                                                        EpisodeProgressView(store: manager.progressStore, item: ep)
+                                                            .frame(width: 220, alignment: .leading)
                                                     }
                                                 }
                                                 .buttonStyle(.plain)
@@ -1051,9 +1055,7 @@ public struct IPTVPlaybackView: View {
                 .padding([.top, .horizontal])
                 
                 Button {
-                    manager.player?.pause()
-                    manager.showingEpisodesDrawer = false
-                    manager.isViewingSeriesDetails = true
+                    manager.returnToSeries()
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "chevron.left.circle.fill")
@@ -1089,6 +1091,7 @@ public struct IPTVPlaybackView: View {
                                         Text(ep.groupTitle)
                                             .font(.caption2)
                                             .foregroundColor(.white.opacity(0.6))
+                                        EpisodeProgressView(store: manager.progressStore, item: ep)
                                     }
                                     Spacer()
                                 }
@@ -1107,6 +1110,30 @@ public struct IPTVPlaybackView: View {
             .cornerRadius(12)
             .padding()
             .shadow(radius: 20)
+        }
+    }
+}
+
+private struct EpisodeProgressView: View {
+    @ObservedObject var store: PlaybackProgressStore
+    let item: M3UItem
+
+    var body: some View {
+        if let progress = store.progress(for: item) {
+            if progress.completed {
+                Label("Watched", systemImage: "checkmark.circle.fill")
+                    .font(.caption2).foregroundColor(.gray)
+            } else if let position = progress.resumePosition {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Continue from \(PlaybackProgress.timestamp(position))", systemImage: "play.circle")
+                        .font(.caption2).foregroundColor(.blue)
+                    if progress.duration > 0 {
+                        ProgressView(value: progress.fraction).tint(.blue)
+                            .accessibilityLabel("Playback progress")
+                            .accessibilityValue("\(Int(progress.fraction * 100)) percent")
+                    }
+                }
+            }
         }
     }
 }

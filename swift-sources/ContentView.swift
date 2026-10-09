@@ -67,6 +67,18 @@ public struct ContentView: View {
         .sheet(isPresented: $manager.showingAboutSheet) {
             aboutSheet
         }
+        .alert("Continue watching?", isPresented: $manager.showingResumeChoice, presenting: manager.resumeRequest) { request in
+            Button("Resume from \(PlaybackProgress.timestamp(request.position))") {
+                manager.resolveResume(request, startOver: false)
+            }
+            Button("Start over") { manager.resolveResume(request, startOver: true) }
+            Button("Cancel", role: .cancel) { manager.cancelResume() }
+        } message: { request in
+            Text(request.item.name)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Self.backgroundNotification)) { _ in
+            manager.pauseForBackground()
+        }
         #if os(macOS)
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             manager.updateFullscreenState(true)
@@ -74,6 +86,14 @@ public struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
             manager.updateFullscreenState(false)
         }
+        #endif
+    }
+
+    private static var backgroundNotification: Notification.Name {
+        #if os(macOS)
+        return NSApplication.didHideNotification
+        #else
+        return UIApplication.didEnterBackgroundNotification
         #endif
     }
 

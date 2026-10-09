@@ -72,6 +72,20 @@ private final class DisplaySleepManager: @unchecked Sendable {
 @MainActor
 public final class IPTVPlayerManager: NSObject, ObservableObject {
     let subtitles = SubtitleController()
+    let progressStore: PlaybackProgressStore
+    @Published var showingResumeChoice = false
+    @Published var resumeRequest: PlaybackResumeRequest? {
+        didSet { showingResumeChoice = resumeRequest != nil }
+    }
+    private var seriesOverviewItem: M3UItem?
+    private var pendingResumePosition: Double?
+    private var vlcResumeSeekIssued = false
+    private var resumeTimeoutTask: Task<Void, Never>?
+    private var wantsPlayback = false
+    private var playbackFinished = false
+    private var lastProgressSave = Date.distantPast
+    private var playbackEndObserver: NSObjectProtocol?
+    private var visiblePlayerViews: Set<UUID> = []
     
     // MARK: - Published State
     
@@ -97,6 +111,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var selectedSection: M3UItem.ContentType = .live {
         didSet {
             if oldValue != selectedSection {
+                stop()
                 selectedCategory = "All"
                 reindexCategoriesAndChannels()
                 if selectedSection == .series {
@@ -329,9 +344,22 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     // MARK: - Initialization
     
     public override init() {
+        progressStore = PlaybackProgressStore()
         super.init()
+        observeProgress()
         loadPersistedState()
         setupAudioSessionIfAvailable()
+    }
+
+    /// Isolated storage and no automatic playlist playback for lifecycle tests.
+    init(progressDefaults: UserDefaults) {
+        progressStore = PlaybackProgressStore(defaults: progressDefaults)
+        super.init()
+        observeProgress()
+    }
+
+    private func observeProgress() {
+        progressStore.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
     }
     
     deinit {
@@ -340,6 +368,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         #endif
         playerItemStatusObserver?.invalidate()
         playerTimeControlObserver?.invalidate()
+        if let playbackEndObserver { NotificationCenter.default.removeObserver(playbackEndObserver) }
     }
     
     // MARK: - Fast High-Performance Indexing & Filtering
@@ -522,6 +551,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             return
         }
         // Immediately reset and dismiss series episode options when switching to Live TV or Movies
+        seriesOverviewItem = nil
         self.isViewingSeriesDetails = false
         self.seriesEpisodes = []
         self.showingEpisodesDrawer = false
@@ -531,20 +561,57 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Plays an individual stream, movie, or resolved TV episode directly.
     public func playDirectStream(_ item: M3UItem) {
         #if os(macOS)
-        playDirectStream(item, useVLC: item.contentType == .live)
+        requestPlayback(item, useVLC: item.contentType == .live)
         #else
-        playDirectStream(item, useVLC: false)
+        requestPlayback(item, useVLC: false)
         #endif
+    }
+
+    private func requestPlayback(_ item: M3UItem, useVLC: Bool) {
+        tearDownPlayback(nextItem: item)
+        resumeRequest = nil
+        if item.isVOD, let position = progressStore.progress(for: item)?.resumePosition {
+            resumeRequest = PlaybackResumeRequest(item: item, position: position, useVLC: useVLC)
+        } else {
+            playDirectStream(item, useVLC: useVLC)
+        }
+    }
+
+    func resolveResume(_ request: PlaybackResumeRequest, startOver: Bool) {
+        guard resumeRequest?.id == request.id else { return }
+        resumeRequest = nil
+        if startOver { progressStore.clear(request.item) }
+        playDirectStream(request.item, useVLC: request.useVLC, position: startOver ? nil : request.position)
+    }
+
+    func cancelResume() { resumeRequest = nil }
+
+    var continueWatchingEpisode: M3UItem? {
+        seriesEpisodes.filter { progressStore.progress(for: $0)?.resumePosition != nil }
+            .max { (progressStore.progress(for: $0)?.updatedAt ?? .distantPast) < (progressStore.progress(for: $1)?.updatedAt ?? .distantPast) }
+    }
+
+    func continueWatching(_ item: M3UItem) {
+        let position = progressStore.progress(for: item)?.resumePosition
+        playDirectStream(item, useVLC: false, position: position)
     }
 
     #if os(macOS)
     /// Retries the selected stream explicitly with AVKit, even when it is a live channel.
     public func playDirectStreamWithAVKit(_ item: M3UItem) {
-        playDirectStream(item, useVLC: false)
+        let position = currentChannel?.subtitleCacheKey == item.subtitleCacheKey ? (pendingResumePosition ?? playbackPosition()) : nil
+        playDirectStream(item, useVLC: false, position: position)
     }
     #endif
 
-    private func playDirectStream(_ item: M3UItem, useVLC: Bool) {
+    private func playDirectStream(_ item: M3UItem, useVLC: Bool, position: Double? = nil) {
+        tearDownPlayback(nextItem: item)
+        resumeRequest = nil
+        pendingResumePosition = position.flatMap { $0 > 0 ? $0 : nil }
+        wantsPlayback = true
+        playbackFinished = false
+        if position == nil, progressStore.progress(for: item)?.completed == true { progressStore.clear(item) }
+        lastProgressSave = Date()
         subtitles.reset(for: item.isVOD ? item : nil)
         #if os(macOS)
         stopVLCPlayback()
@@ -582,30 +649,23 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             playerItem.preferredForwardBufferDuration = 3.0 // Low-latency for Live TV
         }
         
-        if let existingPlayer = self.player {
-            existingPlayer.pause()
-            existingPlayer.replaceCurrentItem(with: nil)
-            existingPlayer.automaticallyWaitsToMinimizeStalling = true
-            existingPlayer.replaceCurrentItem(with: playerItem)
-            existingPlayer.rate = 1.0
-        } else {
-            let newPlayer = AVPlayer(playerItem: playerItem)
-            newPlayer.automaticallyWaitsToMinimizeStalling = true
-            self.player = newPlayer
-        }
+        let newPlayer = AVPlayer(playerItem: playerItem)
+        newPlayer.automaticallyWaitsToMinimizeStalling = true
+        self.player = newPlayer
         self.player?.volume = playbackVolume
         
         setupTimeObserver()
         observePlayerItem(playerItem)
-        self.player?.play()
-        self.isPlaying = true
+        if pendingResumePosition == nil { self.player?.play() }
+        self.isPlaying = pendingResumePosition == nil
     }
 
     #if os(macOS)
     /// Switches the selected stream to VLC's in-app playback engine.
     public func playCurrentStreamWithVLC() {
-        guard let currentChannel else { return }
-        startVLCPlayback(for: currentChannel)
+        guard let currentChannel, !isViewingSeriesDetails, resumeRequest == nil else { return }
+        let position = pendingResumePosition ?? playbackPosition()
+        playDirectStream(currentChannel, useVLC: true, position: position)
     }
 
     private func startVLCPlayback(for item: M3UItem) {
@@ -623,11 +683,24 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         if item.isVOD {
             subtitles.configure(player: vlc, provider: subtitleProvider(for: item))
         }
-        vlc.audio?.volume = Int32((playbackVolume * 100).rounded())
+        vlc.audio?.volume = pendingResumePosition == nil ? Int32((playbackVolume * 100).rounded()) : 0
         useVLCPlayback = true
         errorMessage = nil
         isBuffering = true
         isPlaying = false
+        if pendingResumePosition != nil {
+            resumeTimeoutTask = Task { @MainActor [weak self, weak vlc] in
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+                guard !Task.isCancelled, let self, let vlc, self.vlcPlayer === vlc,
+                      self.pendingResumePosition != nil else { return }
+                self.wantsPlayback = false
+                vlc.pause()
+                vlc.audio?.volume = Int32((self.playbackVolume * 100).rounded())
+                self.isPlaying = false
+                self.isBuffering = false
+                self.errorMessage = "This stream could not seek to the saved position. Reopen it and choose Start over."
+            }
+        }
     }
 
     private func stopVLCPlayback() {
@@ -636,6 +709,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             return
         }
         retiringVLCPlayers[ObjectIdentifier(previous)] = previous
+        previous.audio?.volume = 0
+        previous.pause()
         vlcPlayer = nil
         useVLCPlayback = false
         previous.stop()
@@ -645,28 +720,21 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Queries the Xtream server for a TV show's seasons and episodes,
     /// stops playback, and presents the rich Series Overview & Episodes grid first.
     public func fetchAndShowSeries(_ item: M3UItem) {
+        tearDownPlayback()
+        resumeRequest = nil
+        seriesOverviewItem = item
         subtitles.reset(for: nil)
         self.currentChannel = item
         self.isViewingSeriesDetails = true
         self.isSeriesGridView = true
-        
-        // Stop any active video so that the rich Series Overview hero is visible immediately
-        self.player?.pause()
-        self.player?.replaceCurrentItem(with: nil)
-        #if os(macOS)
-        stopVLCPlayback()
-        #endif
-        self.isPlaying = false
-        self.useVLCPlayback = false
-        self.isBuffering = false
         self.errorMessage = nil
         self.isLoadingEpisodes = true
         self.seriesEpisodes = []
         
         // Extract series ID from URL path (e.g. /series/user/pass/123.mp4)
-        var seriesId = 0
+        var seriesId = Int(item.seriesID ?? "") ?? 0
         let urlStr = item.streamURL.absoluteString
-        if let match = urlStr.range(of: #"/series/[^/]+/[^/]+/(\d+)"#, options: .regularExpression) {
+        if seriesId == 0, let match = urlStr.range(of: #"/series/[^/]+/[^/]+/(\d+)"#, options: .regularExpression) {
             let sub = urlStr[match]
             if let lastSlash = sub.lastIndex(of: "/"), let parsed = Int(sub[sub.index(after: lastSlash)...]) {
                 seriesId = parsed
@@ -686,9 +754,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                     password: pass,
                     seriesId: seriesId
                 )
+                guard self.seriesOverviewItem?.id == item.id else { return }
                 self.seriesEpisodes = eps
                 self.isLoadingEpisodes = false
             } catch {
+                guard self.seriesOverviewItem?.id == item.id else { return }
                 self.isLoadingEpisodes = false
                 if self.seriesEpisodes.isEmpty {
                     self.seriesEpisodes = [item]
@@ -699,6 +769,90 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     public func fetchAndPlaySeries(_ item: M3UItem) {
         fetchAndShowSeries(item)
+    }
+
+    /// Every route back to the episode browser uses the same engine-independent exit.
+    public func returnToSeries() {
+        let overview = seriesOverviewItem ?? currentChannel
+        tearDownPlayback()
+        resumeRequest = nil
+        currentChannel = overview
+        isViewingSeriesDetails = true
+        showingEpisodesDrawer = false
+        showVideoControls = true
+    }
+
+    private func playbackPosition() -> Double {
+        #if os(macOS)
+        if let vlcPlayer, useVLCPlayback { return max(0, Double(vlcPlayer.time.intValue) / 1000) }
+        #endif
+        let seconds = player?.currentTime().seconds ?? currentTime
+        return seconds.isFinite ? max(0, seconds) : currentTime
+    }
+
+    private func saveProgress(force: Bool = false, completed: Bool = false) {
+        guard let item = currentChannel, item.isVOD, !isViewingSeriesDetails,
+              pendingResumePosition == nil, player?.currentItem != nil || useVLCPlayback else { return }
+        guard force || Date().timeIntervalSince(lastProgressSave) >= 5 else { return }
+        lastProgressSave = Date()
+        let position = playbackPosition()
+        let itemDuration = player?.currentItem?.duration.seconds ?? 0
+        let total = itemDuration.isFinite && itemDuration > 0 ? itemDuration : duration
+        progressStore.save(item: item, position: position, duration: total, completed: completed || playbackFinished)
+    }
+
+    /// Saves the actual engine clock before destroying its item and observers.
+    private func tearDownPlayback(nextItem: M3UItem? = nil) {
+        saveProgress(force: true)
+        wantsPlayback = false
+        pendingResumePosition = nil
+        vlcResumeSeekIssued = false
+        resumeTimeoutTask?.cancel()
+        resumeTimeoutTask = nil
+        controlsTimer?.cancel()
+        player?.pause()
+        removeTimeObserver()
+        playerItemStatusObserver?.invalidate()
+        playerItemStatusObserver = nil
+        playerTimeControlObserver?.invalidate()
+        playerTimeControlObserver = nil
+        if let playbackEndObserver { NotificationCenter.default.removeObserver(playbackEndObserver) }
+        playbackEndObserver = nil
+        player?.replaceCurrentItem(with: nil)
+        player = nil
+        subtitles.reset(for: nextItem?.isVOD == true ? nextItem : nil)
+        #if os(macOS)
+        stopVLCPlayback()
+        #endif
+        isPlaying = false
+        isBuffering = false
+        currentTime = 0
+        duration = 0
+    }
+
+    /// Explicitly hiding/backgrounding the app pauses without discarding the surface.
+    func pauseForBackground() {
+        saveProgress(force: true)
+        wantsPlayback = false
+        player?.pause()
+        #if os(macOS)
+        vlcPlayer?.pause()
+        #endif
+        isPlaying = false
+        isBuffering = false
+    }
+
+    func playerViewAppeared(_ identity: UUID) { visiblePlayerViews.insert(identity) }
+
+    func playerViewDisappeared(_ identity: UUID) {
+        visiblePlayerViews.remove(identity)
+        // SwiftUI can briefly replace a host during fullscreen/navigation layout.
+        // Wait one run-loop turn so a replacement can claim the same player.
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, self.visiblePlayerViews.isEmpty else { return }
+            self.stop()
+        }
     }
     
     /// Re-syncs and refreshes the current Xtream Codes server or M3U playlist to fetch updated channels.
@@ -714,16 +868,18 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Tracks the media clock at 100 ms intervals for progress and sidecar subtitles.
     private func setupTimeObserver() {
         removeTimeObserver()
-        guard let pl = self.player else { return }
+        guard let pl = self.player, let observedItem = pl.currentItem else { return }
         
         let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
-        timeObserverToken = pl.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
-            Task { @MainActor [weak self] in
-                guard let self = self, !self.isSeeking else { return }
+        timeObserverToken = pl.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak pl] time in
+            Task { @MainActor [weak self, weak pl] in
+                guard let self = self, let pl, !self.isSeeking, !self.useVLCPlayback,
+                      self.player === pl, pl.currentItem === observedItem else { return }
                 let sec = time.seconds
                 if sec.isFinite && sec >= 0 {
                     self.currentTime = sec
                 }
+                self.saveProgress()
                 if let item = self.player?.currentItem {
                     let dur = item.duration.seconds
                     if dur.isFinite && dur > 0 {
@@ -743,7 +899,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Seeks to a specific timestamp in seconds (for MP4 movies & shows).
     public func seek(to seconds: Double) {
-        guard seconds.isFinite else { return }
+        guard seconds.isFinite, pendingResumePosition == nil, !isViewingSeriesDetails else { return }
+        playbackFinished = false
         subtitles.clearForSeek()
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer {
@@ -821,12 +978,17 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         UserDefaults.standard.set(playbackVolume, forKey: "com.iptvplayer.playbackVolume")
         player?.volume = playbackVolume
         #if os(macOS)
-        vlcPlayer?.audio?.volume = Int32((playbackVolume * 100).rounded())
+        vlcPlayer?.audio?.volume = pendingResumePosition == nil ? Int32((playbackVolume * 100).rounded()) : 0
         #endif
     }
     
     /// Toggles between play and pause.
     public func togglePlayPause() {
+        guard !isViewingSeriesDetails, resumeRequest == nil, pendingResumePosition == nil,
+              currentChannel != nil else { return }
+        wantsPlayback = !isPlaying
+        if wantsPlayback { playbackFinished = false }
+        if !wantsPlayback { saveProgress(force: true) }
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer {
             if isPlaying {
@@ -849,22 +1011,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Stops playback and releases the current player item.
     public func stop() {
-        subtitles.reset(for: nil)
-        #if os(macOS)
-        disableDisplaySleepPrevention()
-        #endif
-        removeTimeObserver()
-        #if os(macOS)
-        stopVLCPlayback()
-        #endif
-        self.player?.pause()
-        self.player?.replaceCurrentItem(with: nil)
-        self.isPlaying = false
-        self.useVLCPlayback = false
-        self.isBuffering = false
+        tearDownPlayback()
+        resumeRequest = nil
+        seriesOverviewItem = nil
         self.currentChannel = nil
         self.seriesEpisodes = []
         self.showingEpisodesDrawer = false
+        self.isViewingSeriesDetails = false
         self.currentTime = 0.0
         self.duration = 0.0
     }
@@ -967,15 +1120,47 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     private func observePlayerItem(_ playerItem: AVPlayerItem) {
         playerItemStatusObserver?.invalidate()
         playerTimeControlObserver?.invalidate()
+        if let playbackEndObserver { NotificationCenter.default.removeObserver(playbackEndObserver) }
+        playbackEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
+                                                                    object: playerItem, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.player?.currentItem === playerItem, !self.useVLCPlayback else { return }
+                self.saveProgress(force: true, completed: true)
+                self.playbackFinished = true
+                self.wantsPlayback = false
+                self.isPlaying = false
+            }
+        }
         
         // Observe status (readyToPlay, failed, unknown)
-        playerItemStatusObserver = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+        playerItemStatusObserver = playerItem.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             Task { @MainActor [weak self] in
                 guard let self = self, !self.useVLCPlayback, self.player?.currentItem === item else { return }
                 switch item.status {
                 case .readyToPlay:
                     self.isBuffering = false
-                    self.isPlaying = true
+                    if let position = self.pendingResumePosition, let player = self.player {
+                        let total = item.duration.seconds
+                        let target = total.isFinite && total > 0 ? min(position, total) : position
+                        player.seek(to: CMTime(seconds: target, preferredTimescale: 600),
+                                    toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+                            Task { @MainActor [weak self] in
+                                guard let self, self.player === player, player.currentItem === item,
+                                      !self.useVLCPlayback else { return }
+                                if finished {
+                                    self.pendingResumePosition = nil
+                                    if self.wantsPlayback { player.play() }
+                                } else {
+                                    // Preserve the bookmark on a failed seek; don't
+                                    // overwrite it with zero during subsequent teardown.
+                                    self.wantsPlayback = false
+                                    self.isPlaying = false
+                                    player.pause()
+                                    self.errorMessage = "Could not resume at the saved position. Reopen the item and choose Start over."
+                                }
+                            }
+                        }
+                    } else if self.wantsPlayback { self.player?.play() }
                     self.subtitles.loadTracksIfNeeded()
                 case .failed:
 #if os(macOS)
@@ -1001,8 +1186,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self = self, !self.useVLCPlayback, self.player === pl,
                           pl.currentItem === playerItem else { return }
-                    self.isPlaying = pl.timeControlStatus == .playing
-                    self.isBuffering = pl.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    self.isPlaying = self.wantsPlayback && pl.timeControlStatus == .playing
+                    self.isBuffering = self.wantsPlayback && pl.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 }
             }
         }
@@ -1114,6 +1299,24 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
 #if os(macOS)
 extension IPTVPlayerManager: VLCMediaPlayerDelegate {
+    private func applyPendingVLCResume(_ player: VLCMediaPlayer) {
+        guard let position = pendingResumePosition else { return }
+        if vlcResumeSeekIssued {
+            // libvlc's set_time is asynchronous: don't save zero or unmute until
+            // the engine reports that the requested position actually took effect.
+            guard abs(Double(player.time.intValue) / 1000 - position) < 2 else { return }
+            pendingResumePosition = nil
+            resumeTimeoutTask?.cancel()
+            resumeTimeoutTask = nil
+            player.audio?.volume = Int32((playbackVolume * 100).rounded())
+            if !wantsPlayback { player.pause() }
+        } else if player.isSeekable, player.media?.length.intValue ?? 0 > 0 {
+            vlcResumeSeekIssued = true
+            player.time = VLCTime(int: Int32(max(0, min(position * 1000, Double(Int32.max)))))
+            currentTime = position
+        }
+    }
+
     nonisolated public func mediaPlayerStateChanged(_ notification: Notification) {
         guard let player = notification.object as? VLCMediaPlayer else { return }
         let state = player.state
@@ -1130,14 +1333,20 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
                 return
             }
             guard self.vlcPlayer === player else { return }
-            self.isPlaying = playing
-            self.isBuffering = state == .opening || (state == .buffering && !playing)
+            self.isPlaying = self.wantsPlayback && playing
+            self.isBuffering = self.wantsPlayback && (state == .opening || (state == .buffering && !playing))
             if state == .error {
                 self.isBuffering = false
                 self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
             } else if state == .playing {
+                self.applyPendingVLCResume(player)
+                if !self.wantsPlayback { player.pause() }
                 self.errorMessage = nil
                 self.subtitles.nativePlayerDidStart()
+            } else if state == .ended {
+                self.saveProgress(force: true, completed: true)
+                self.playbackFinished = true
+                self.wantsPlayback = false
             }
         }
     }
@@ -1150,6 +1359,8 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
             guard let self, self.vlcPlayer === player, !self.isSeeking else { return }
             if current.isFinite && current >= 0 { self.currentTime = current }
             if total.isFinite && total > 0 { self.duration = total }
+            self.applyPendingVLCResume(player)
+            self.saveProgress()
         }
     }
 }

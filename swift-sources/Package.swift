@@ -33,6 +33,7 @@ let package = Package(
                 "M3UParser.swift",
                 "XtreamCodesManager.swift",
                 "IPTVPlayerManager.swift",
+                "PlaybackProgress.swift",
                 "IPTVPlaybackView.swift",
                 "Subtitles.swift",
                 "SubtitleController.swift",
