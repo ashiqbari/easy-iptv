@@ -185,6 +185,9 @@ if [ "${BUILD_ONLY}" = true ]; then
     exit 0
 fi
 
+# The packaged app is self-contained; free SwiftPM's large VLC artifacts before hdiutil duplicates it.
+rm -rf ".build"
+
 # Generate the DMG disk image using built-in hdiutil
 echo -e "${BLUE}[4/4] Creating ${DMG_NAME} using native hdiutil...${NC}"
 mkdir -p "${STAGING_DIR}"
