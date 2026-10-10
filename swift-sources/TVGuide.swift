@@ -5,6 +5,11 @@ struct GuideProgram: Identifiable, Sendable {
     let description: String
     let start: Date
     let end: Date
+    let categories: String
+    init(title: String, description: String, start: Date, end: Date, categories: String = "") {
+        self.title = title; self.description = description; self.start = start; self.end = end
+        self.categories = categories
+    }
     var id: String { "\(start.timeIntervalSince1970)|\(end.timeIntervalSince1970)|\(title)" }
     var timeRange: String { "\(start.formatted(date: .abbreviated, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))" }
     var durationMin: Int { Int(end.timeIntervalSince(start) / 60) }
@@ -102,6 +107,7 @@ actor TVGuide {
         parser.delegate = delegate
         let parsed = parser.parse()
         try Task.checkCancellation()
+        if let error = delegate.failure { throw error }
         guard parsed, delegate.isTV else { throw GuideError.invalidFeed }
         return delegate.programs.sorted { $0.start < $1.start }
     }
@@ -129,13 +135,20 @@ actor TVGuide {
     }
 }
 
-private final class XMLTVPrograms: NSObject, XMLParserDelegate {
+final class XMLTVPrograms: NSObject, XMLParserDelegate {
     let channelID: String
     private let now: Date?
     private let midnight: Date?
     var isTV = false
     private var sawRoot = false
     var programs: [GuideProgram] = []
+    var failure: Error?
+    private let channelIDs: Set<String>?
+    private let receive: ((String, GuideProgram) throws -> Void)?
+    private var currentChannel = ""
+    private var categories = ""
+    private var depth = 0
+    private let formatter = DateFormatter()
     private var selected = false
     private var start: Date?
     private var end: Date?
@@ -144,10 +157,17 @@ private final class XMLTVPrograms: NSObject, XMLParserDelegate {
     private var field: String?
     private var text = ""
 
-    init(channelID: String, now: Date?, calendar: Calendar) {
+    init(channelID: String = "", channelIDs: Set<String>? = nil, now: Date?, calendar: Calendar,
+         receive: ((String, GuideProgram) throws -> Void)? = nil) {
         self.channelID = channelID
+        self.channelIDs = channelIDs
+        self.receive = receive
         self.now = now
         self.midnight = now.flatMap { calendar.dateInterval(of: .day, for: $0)?.end }
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.isLenient = false
     }
 
     private func date(_ value: String?) -> Date? {
@@ -156,43 +176,58 @@ private final class XMLTVPrograms: NSObject, XMLParserDelegate {
         guard let stamp = parts.first, [12, 14].contains(stamp.count), stamp.allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
         let zone = parts.count > 1 ? String(parts[1]) : "+0000"
         guard zone.count == 5, ["+", "-"].contains(String(zone.prefix(1))), zone.dropFirst().allSatisfy({ $0.isASCII && $0.isNumber }) else { return nil }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = Calendar(identifier: .gregorian)
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.isLenient = false
-        formatter.dateFormat = stamp.count == 14 ? "yyyyMMddHHmmss Z" : "yyyyMMddHHmm Z"
+        let format = stamp.count == 14 ? "yyyyMMddHHmmss Z" : "yyyyMMddHHmm Z"
+        if formatter.dateFormat != format { formatter.dateFormat = format }
         return formatter.date(from: "\(stamp) \(zone)")
     }
 
     func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
         if Task.isCancelled { parser.abortParsing(); return }
+        depth += 1
+        guard depth <= 64, attributes.values.allSatisfy({ $0.utf8.count <= 16_384 }) else {
+            failure = GuideError.invalidFeed; parser.abortParsing(); return
+        }
         if !sawRoot { isTV = name == "tv"; sawRoot = true }
         if name == "programme" {
-            selected = attributes["channel"] == channelID
+            currentChannel = attributes["channel"] ?? ""
+            selected = channelIDs?.contains(currentChannel) ?? (currentChannel == channelID)
             start = selected ? date(attributes["start"]) : nil
             end = selected ? date(attributes["stop"]) : nil
             if let now, let midnight, let start, let end {
                 selected = selected && end > now && start < midnight
             }
-            title = ""; details = ""; field = nil
-        } else if selected && ["title", "desc"].contains(name) {
+            title = ""; details = ""; categories = ""; field = nil
+        } else if selected && ["title", "desc", "category"].contains(name) {
             field = name; text = ""
         }
     }
 
-    func parser(_ parser: XMLParser, foundCharacters string: String) { if field != nil { text += string } }
-    func parser(_ parser: XMLParser, foundCDATA data: Data) { if field != nil { text += String(decoding: data, as: UTF8.self) } }
+    func parser(_ parser: XMLParser, foundCharacters string: String) {
+        if Task.isCancelled { parser.abortParsing(); return }
+        if field != nil { text += string.prefix(max(0, 8_192 - text.count)) }
+    }
+    func parser(_ parser: XMLParser, foundCDATA data: Data) {
+        self.parser(parser, foundCharacters: String(decoding: data.prefix(32_768), as: UTF8.self))
+    }
+    func parser(_ parser: XMLParser, foundInternalEntityDeclarationWithName name: String, value: String?) {
+        failure = GuideError.invalidFeed; parser.abortParsing()
+    }
     func parser(_ parser: XMLParser, didEndElement name: String, namespaceURI: String?, qualifiedName: String?) {
+        depth -= 1
         if name == field {
             let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if name == "title", title.isEmpty { title = value }
+            if name == "title", title.isEmpty { title = String(value.prefix(1_024)) }
             if name == "desc", details.isEmpty { details = value }
+            if name == "category" { categories = String((categories + " " + value).prefix(1_024)) }
             field = nil
         }
         if name == "programme" {
             if selected, let start, let end, end > start, !title.isEmpty {
-                programs.append(GuideProgram(title: title, description: details, start: start, end: end))
+                let program = GuideProgram(title: title, description: details, start: start, end: end, categories: categories)
+                if let receive {
+                    do { try receive(currentChannel, program) }
+                    catch { failure = error; parser.abortParsing() }
+                } else { programs.append(program) }
             }
             selected = false; field = nil
         }

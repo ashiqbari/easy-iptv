@@ -82,6 +82,26 @@ not repeat the download. Text-size preferences are remembered across sessions.
 Load real provider listings, search the guide, export or import guide JSON, or
 export listings for a category. Guide availability depends on your provider.
 
+In Live TV, choose **Search TV Guide** in the toolbar (Command–Shift–G on macOS).
+Search a team, match, or programme across **On now** or **Later today** listings,
+then use **Watch** to open a matching live channel. Results include up to 50
+channels per page and reflect the provider's schedule, not verified broadcast content.
+
+The first search window starts a background XMLTV import. Current and upcoming
+programmes for the rest of the local day are indexed on disk in a SQLite cache;
+the whole guide is not retained in app memory. Reopening the window uses cached
+listings, with refreshes after three hours or at the next local day. A failed
+refresh preserves the previous guide. Channels need a guide URL and a matching
+XMLTV channel ID (`tvg-id` / provider EPG ID); channels without these are reported
+as unavailable rather than guessed by name.
+
+Imports stream directly into database transactions, and searches are debounced
+and paginated. The cache has a 256 MiB database budget (temporary journal files
+also use disk space), downloads have a 1 GiB safety budget, and expensive queries
+are interrupted. A provider may still require downloading its full XMLTV feed,
+even though only today's relevant listings are retained. No separate SQLite
+installation is required.
+
 </details>
 
 ## Build & run

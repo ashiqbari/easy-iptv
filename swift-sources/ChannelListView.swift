@@ -12,6 +12,7 @@ import SwiftUI
 public struct ChannelListView: View {
     
     @ObservedObject var manager: IPTVPlayerManager
+    @State private var showingGuideSearch = false
     static let categoryShortcuts = ["All", "Favorites"]
     
     public init(manager: IPTVPlayerManager) {
@@ -67,7 +68,15 @@ public struct ChannelListView: View {
             }
         }
         .navigationTitle("Channels (\(manager.filteredChannels.count))")
+        .sheet(isPresented: $showingGuideSearch) { GuideSearchView(manager: manager) }
         .toolbar {
+            if manager.selectedSection == .live {
+                ToolbarItem(placement: .automatic) {
+                    Button { showingGuideSearch = true } label: { Label("Search TV Guide", systemImage: "text.magnifyingglass") }
+                        .help("Find channels by current or upcoming programmes")
+                        .keyboardShortcut("g", modifiers: [.command, .shift])
+                }
+            }
             #if os(macOS)
             ToolbarItem(placement: .navigation) {
                 Button { manager.toggleChannelsSidebar() } label: {

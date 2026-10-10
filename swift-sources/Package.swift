@@ -41,12 +41,15 @@ let package = Package(
                 "SubtitleController.swift",
                 "SubtitleControls.swift",
                 "TVGuide.swift",
+                "GuideSearchIndex.swift",
+                "GuideSearchView.swift",
                 "ChannelListView.swift",
                 "MovieDetails.swift",
                 "ContentView.swift",
                 "IPTVPlayerApp.swift"
             ],
             linkerSettings: [
+                .linkedLibrary("sqlite3"),
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("QuartzCore"),
                 .linkedFramework("AppKit", .when(platforms: [.macOS])),
