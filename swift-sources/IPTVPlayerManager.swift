@@ -288,31 +288,29 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func selectSeason(_ season: String) {
         self.selectedSeason = season
         self.episodeScrollIndex = 0
+        self.episodeScrollRequest = UUID()
     }
     
-    /// View mode for series episodes (false = horizontal scroll row with navigation arrows, true = full grid).
+    /// View mode for series episodes (false = horizontal carousel, true = full grid).
     @Published public var isSeriesGridView: Bool = false
     
-    /// Current scroll target index for horizontal episode carousel navigation.
+    /// Current scroll target index for either episode layout.
     @Published public var episodeScrollIndex: Int = 0
+    @Published var visibleEpisodeIndex = 0
+    @Published var episodeScrollRequest = UUID()
     
-    /// Scrolls the episode row right to the next batch of episodes.
-    public func scrollEpisodesNext() {
+    /// Moves to the next batch from the visible episode, including after manual scrolling.
+    public func scrollEpisodesNext(from visibleIndex: Int? = nil) {
         let maxIndex = max(0, filteredEpisodesForSelectedSeason.count - 1)
-        if episodeScrollIndex + 3 <= maxIndex {
-            episodeScrollIndex += 3
-        } else {
-            episodeScrollIndex = maxIndex
-        }
+        episodeScrollIndex = min(maxIndex, max(0, visibleIndex ?? episodeScrollIndex) + 3)
+        episodeScrollRequest = UUID()
     }
     
-    /// Scrolls the episode row left to the previous batch of episodes.
-    public func scrollEpisodesPrev() {
-        if episodeScrollIndex >= 3 {
-            episodeScrollIndex -= 3
-        } else {
-            episodeScrollIndex = 0
-        }
+    /// Moves to the previous batch from the visible episode.
+    public func scrollEpisodesPrev(from visibleIndex: Int? = nil) {
+        let maxIndex = max(0, filteredEpisodesForSelectedSeason.count - 1)
+        episodeScrollIndex = max(0, min(maxIndex, visibleIndex ?? episodeScrollIndex) - 3)
+        episodeScrollRequest = UUID()
     }
     
     /// Flag indicating if episodes drawer is visible.

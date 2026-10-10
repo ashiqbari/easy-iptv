@@ -9,6 +9,12 @@ import SwiftUI
 import AVFoundation
 import QuartzCore
 
+private struct EpisodePositions: PreferenceKey {
+    static var defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
 #if os(macOS)
 import VLC
 #endif
@@ -686,6 +692,7 @@ public struct IPTVPlaybackView: View {
     
     /// TV Series Overview & Seasons / Episodes Grid Page (Matches Reference UI in Screenshot 3)
     private var seriesHeroView: some View {
+        ScrollViewReader { gridProxy in
         ScrollView {
             ZStack(alignment: .top) {
                 // Top warm ambient glow matching screenshot 3
@@ -783,101 +790,16 @@ public struct IPTVPlaybackView: View {
                         .padding(.horizontal, 32)
                         .padding(.top, 32)
                         
-                        // Seasons and Episodes Section
-                        VStack(alignment: .leading, spacing: 16) {
-                            HStack(alignment: .center, spacing: 12) {
-                                Text("Seasons and Episodes")
-                                    .font(.title2.bold())
-                                    .foregroundColor(.primary)
-                                
-                                Spacer()
-                                
-                                // View Mode Toggle (Horizontal Row vs Multi-Column Grid)
-                                Button {
-                                    manager.isSeriesGridView.toggle()
-                                } label: {
-                                    HStack(spacing: 5) {
-                                        Image(systemName: manager.isSeriesGridView ? "rectangle.grid.1x2.fill" : "square.grid.2x2.fill")
-                                        Text(manager.isSeriesGridView ? "Carousel View" : "Grid View")
-                                    }
-                                    .font(.caption.bold())
-                                    .foregroundColor(.primary)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(Color.primary.opacity(0.15))
-                                    .cornerRadius(20)
-                                }
-                                .buttonStyle(.plain)
-                                .help("Switch between horizontal carousel and full grid view")
-                                
-                                // Left & Right Carousel Navigation Arrow Buttons
-                                if !manager.isSeriesGridView && manager.filteredEpisodesForSelectedSeason.count > 1 {
-                                    HStack(spacing: 6) {
-                                        Button {
-                                            manager.scrollEpisodesPrev()
-                                        } label: {
-                                            Image(systemName: "chevron.left")
-                                                .font(.caption.bold())
-                                                .foregroundColor(.primary)
-                                                .frame(width: 28, height: 28)
-                                                .background(Color.primary.opacity(0.15))
-                                                .clipShape(Circle())
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help("Scroll left to previous episodes")
-                                        
-                                        Button {
-                                            manager.scrollEpisodesNext()
-                                        } label: {
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption.bold())
-                                                .foregroundColor(.primary)
-                                                .frame(width: 28, height: 28)
-                                                .background(Color.primary.opacity(0.15))
-                                                .clipShape(Circle())
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help("Scroll right to next episodes")
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, 32)
+                        // Keep navigation reachable as the grid scrolls.
+                        LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+                            Section {
                             
                             DownloadSeasonControl(manager: manager)
                                 .buttonStyle(.bordered)
                                 .padding(.horizontal, 32)
 
                             // Dynamic Interactive Season Selector Chips
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 10) {
-                                    ForEach(manager.availableSeasons, id: \.self) { season in
-                                        let activeSeason = manager.selectedSeason.isEmpty ? (manager.availableSeasons.first ?? "Season 1") : manager.selectedSeason
-                                        let isSelected = activeSeason == season
-                                        let epCount = manager.seriesEpisodes.filter { $0.groupTitle == season }.count
-                                        
-                                        Button {
-                                            manager.selectSeason(season)
-                                        } label: {
-                                            HStack(spacing: 6) {
-                                                Text(season)
-                                                    .font(.subheadline.weight(isSelected ? .bold : .medium))
-                                                if epCount > 0 {
-                                                    Text("(\(epCount))")
-                                                        .font(.caption2)
-                                                        .opacity(0.85)
-                                                }
-                                            }
-                                            .foregroundColor(isSelected ? .white : .primary)
-                                            .padding(.horizontal, 16)
-                                            .padding(.vertical, 8)
-                                            .background(isSelected ? Color.accentColor : Color.primary.opacity(0.12))
-                                            .cornerRadius(20)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                }
-                                .padding(.horizontal, 32)
-                            }
+                            seasonSelector
                             
                             if manager.seriesEpisodes.isEmpty && !manager.isLoadingEpisodes {
                                 Text("No episode listings available for this title. Try again or select another show.")
@@ -887,7 +809,7 @@ public struct IPTVPlaybackView: View {
                             } else if manager.isSeriesGridView {
                                 // Full Multi-Column Grid View (All episodes visible at once!)
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 16)], spacing: 16) {
-                                    ForEach(Array(manager.filteredEpisodesForSelectedSeason.enumerated()), id: \.element.id) { index, ep in
+                                    ForEach(Array(manager.filteredEpisodesForSelectedSeason.enumerated()), id: \.offset) { index, ep in
                                         VStack(alignment: .leading, spacing: 8) {
                                             Button {
                                                 manager.playDirectStream(ep)
@@ -924,6 +846,9 @@ public struct IPTVPlaybackView: View {
                                             DownloadControl(item: ep, series: manager.downloadSeriesItem, details: manager.seriesMetadata, downloads: manager.downloads)
                                                 .buttonStyle(.bordered)
                                         }
+                                        .background(GeometryReader { geometry in
+                                            Color.clear.preference(key: EpisodePositions.self, value: [index: geometry.frame(in: .named("seriesGridViewport")).minY])
+                                        })
                                     }
                                 }
                                 .padding(.horizontal, 32)
@@ -933,7 +858,7 @@ public struct IPTVPlaybackView: View {
                                 ScrollViewReader { scrollProxy in
                                     ScrollView(.horizontal, showsIndicators: true) {
                                         LazyHStack(spacing: 16) {
-                                            ForEach(Array(manager.filteredEpisodesForSelectedSeason.enumerated()), id: \.element.id) { index, ep in
+                                            ForEach(Array(manager.filteredEpisodesForSelectedSeason.enumerated()), id: \.offset) { index, ep in
                                                 VStack(alignment: .leading, spacing: 8) {
                                                     Button {
                                                         manager.playDirectStream(ep)
@@ -967,21 +892,29 @@ public struct IPTVPlaybackView: View {
                                                         }
                                                     }
                                                     .buttonStyle(.plain)
-                                                    .id(index)
                                                     DownloadControl(item: ep, series: manager.downloadSeriesItem, details: manager.seriesMetadata, downloads: manager.downloads)
                                                         .buttonStyle(.bordered)
                                                 }
+                                                .background(GeometryReader { geometry in
+                                                    Color.clear.preference(key: EpisodePositions.self, value: [index: geometry.frame(in: .named("seriesCarouselViewport")).minX])
+                                                })
                                             }
                                         }
                                         .padding(.horizontal, 32)
                                         .padding(.bottom, 20)
                                     }
-                                    .onChange(of: manager.episodeScrollIndex) { _, newIdx in
+                                    .coordinateSpace(name: "seriesCarouselViewport")
+                                    .onChange(of: manager.episodeScrollRequest) { _, _ in
                                         withAnimation(.easeInOut(duration: 0.3)) {
-                                            scrollProxy.scrollTo(newIdx, anchor: .leading)
+                                            scrollProxy.scrollTo(manager.episodeScrollIndex, anchor: .leading)
                                         }
                                     }
                                 }
+                            }
+                            } header: {
+                                episodeNavigationBar
+                                    .padding(.vertical, 8)
+                                    .background(.background)
                             }
                         }
                     }
@@ -991,8 +924,116 @@ public struct IPTVPlaybackView: View {
         }
         .foregroundStyle(.primary)
         .background(.background)
+        .coordinateSpace(name: "seriesGridViewport")
+        .onPreferenceChange(EpisodePositions.self) { positions in
+            manager.visibleEpisodeIndex = positions.min {
+                abs($0.value) == abs($1.value) ? $0.key < $1.key : abs($0.value) < abs($1.value)
+            }?.key ?? 0
+        }
+        .onChange(of: manager.episodeScrollRequest) { _, _ in
+            guard manager.isSeriesGridView else { return }
+            withAnimation(.easeInOut(duration: 0.3)) {
+                gridProxy.scrollTo(manager.episodeScrollIndex, anchor: .top)
+            }
+        }
+        }
     }
     
+    private var episodeNavigationBar: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text("Seasons and Episodes")
+                .font(.title2.bold())
+                .foregroundColor(.primary)
+
+            Spacer()
+
+            // View Mode Toggle (Horizontal Row vs Multi-Column Grid)
+            Button {
+                manager.isSeriesGridView.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: manager.isSeriesGridView ? "rectangle.grid.1x2.fill" : "square.grid.2x2.fill")
+                    Text(manager.isSeriesGridView ? "Carousel View" : "Grid View")
+                }
+                .font(.caption.bold())
+                .foregroundColor(.primary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.primary.opacity(0.15))
+                .cornerRadius(20)
+            }
+            .buttonStyle(.plain)
+            .help("Switch between horizontal carousel and full grid view")
+
+            if manager.filteredEpisodesForSelectedSeason.count > 1 {
+                HStack(spacing: 6) {
+                    Button {
+                        manager.scrollEpisodesPrev(from: manager.visibleEpisodeIndex)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.caption.bold())
+                            .foregroundColor(.primary)
+                            .frame(width: 28, height: 28)
+                            .background(Color.primary.opacity(0.15))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(manager.visibleEpisodeIndex == 0)
+                    .accessibilityLabel("Previous episodes")
+                    .help("Previous episodes")
+
+                    Button {
+                        manager.scrollEpisodesNext(from: manager.visibleEpisodeIndex)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.caption.bold())
+                            .foregroundColor(.primary)
+                            .frame(width: 28, height: 28)
+                            .background(Color.primary.opacity(0.15))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(manager.visibleEpisodeIndex >= manager.filteredEpisodesForSelectedSeason.count - 1)
+                    .accessibilityLabel("Next episodes")
+                    .help("Next episodes")
+                }
+            }
+        }
+        .padding(.horizontal, 32)
+    }
+
+    var seasonSelector: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 10)], alignment: .leading, spacing: 10) {
+            ForEach(manager.availableSeasons, id: \.self) { season in
+                let activeSeason = manager.selectedSeason.isEmpty ? (manager.availableSeasons.first ?? "Season 1") : manager.selectedSeason
+                let isSelected = activeSeason == season
+                let epCount = manager.seriesEpisodes.filter { $0.groupTitle == season }.count
+
+                Button {
+                    manager.selectSeason(season)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(season)
+                            .font(.subheadline.weight(isSelected ? .bold : .medium))
+                        if epCount > 0 {
+                            Text("(\(epCount))")
+                                .font(.caption2)
+                                .opacity(0.85)
+                        }
+                    }
+                    .foregroundColor(isSelected ? .white : .primary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity)
+                    .background(isSelected ? Color.accentColor : Color.primary.opacity(0.12))
+                    .cornerRadius(20)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 32)
+    }
+
     /// Placeholder state when no channel is selected.
     private var emptyPlaceholderView: some View {
         VStack(spacing: 16) {

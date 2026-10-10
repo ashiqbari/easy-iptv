@@ -1,7 +1,115 @@
 import XCTest
+import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 @testable import EasyIPTV
 
 final class SeriesDetailsTests: XCTestCase {
+    @MainActor func testEpisodeArrowsUseVisiblePositionInBothLayoutsAndClampAtBounds() {
+        let defaults = UserDefaults(suiteName: "episode-navigation-\(UUID())")!
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer { manager.stop() }
+        manager.seriesEpisodes = (0..<8).map {
+            M3UItem(name: "Episode \($0)", groupTitle: "Season 1", streamURL: URL(string: "https://fixture.invalid/\($0).mp4")!, contentType: .series)
+        }
+        for grid in [true, false] {
+            manager.isSeriesGridView = grid
+            manager.selectSeason("Season 1")
+            manager.scrollEpisodesNext()
+            XCTAssertEqual(manager.episodeScrollIndex, 3)
+            manager.scrollEpisodesPrev(from: 6) // The user scrolled manually past the saved target.
+            XCTAssertEqual(manager.episodeScrollIndex, 3)
+            let request = manager.episodeScrollRequest
+            manager.scrollEpisodesPrev(from: 6)
+            XCTAssertNotEqual(manager.episodeScrollRequest, request, "A repeated target must still scroll")
+            manager.scrollEpisodesNext(from: 6)
+            XCTAssertEqual(manager.episodeScrollIndex, 7)
+            manager.scrollEpisodesNext()
+            XCTAssertEqual(manager.episodeScrollIndex, 7)
+            manager.scrollEpisodesPrev(from: 0)
+            XCTAssertEqual(manager.episodeScrollIndex, 0)
+            manager.selectSeason("Season 1")
+            XCTAssertEqual(manager.episodeScrollIndex, 0)
+        }
+        manager.seriesEpisodes = []
+        manager.scrollEpisodesNext()
+        manager.scrollEpisodesPrev()
+        XCTAssertEqual(manager.episodeScrollIndex, 0)
+    }
+
+    #if os(macOS)
+    @MainActor func testCarouselCanScrollBackAfterNextAndManualScrolling() async throws {
+        try await checkEpisodeScrolling(grid: false)
+    }
+
+    @MainActor func testGridCanScrollBackToOffscreenEpisodes() async throws {
+        try await checkEpisodeScrolling(grid: true)
+    }
+
+    @MainActor private func checkEpisodeScrolling(grid: Bool) async throws {
+        let manager = IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: "episode-scroll-view-\(UUID())")!)
+        manager.currentChannel = show("1")
+        manager.isViewingSeriesDetails = true
+        manager.isSeriesGridView = grid
+        manager.seriesEpisodes = (0..<24).map {
+            M3UItem(name: "Episode \($0)", groupTitle: "Season 1", streamURL: URL(fileURLWithPath: "/private/tmp/episode-\($0).mp4"), contentType: .series)
+        }
+        let hosting = NSHostingView(rootView: IPTVPlaybackView(manager: manager).transaction { $0.disablesAnimations = true })
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 850, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { manager.stop(); window.close() }
+        func settle() async throws {
+            for _ in 0..<15 {
+                hosting.layoutSubtreeIfNeeded()
+                try await Task.sleep(nanoseconds: 40_000_000)
+            }
+        }
+        func carousel(in view: NSView) -> NSScrollView? {
+            if let scroll = view as? NSScrollView,
+               grid ? (scroll.hasVerticalScroller && !scroll.hasHorizontalScroller) : scroll.hasHorizontalScroller { return scroll }
+            return view.subviews.lazy.compactMap { carousel(in: $0) }.first
+        }
+        try await settle()
+        let scroll = try XCTUnwrap(carousel(in: hosting))
+        func offset() -> CGFloat { grid ? scroll.contentView.bounds.minY : scroll.contentView.bounds.minX }
+        // Set up a scrolled viewport before ScrollViewReader establishes an animated target.
+        scroll.contentView.setBoundsOrigin(grid ? CGPoint(x: 0, y: 1400) : CGPoint(x: 1400, y: 0))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        try await settle()
+        XCTAssertGreaterThan(manager.visibleEpisodeIndex, 3)
+        let manual = offset()
+        manager.scrollEpisodesPrev(from: manager.visibleEpisodeIndex)
+        try await settle()
+        XCTAssertLessThan(offset(), manual - 100)
+        let previous = offset()
+        manager.scrollEpisodesNext(from: manager.visibleEpisodeIndex)
+        try await settle()
+        XCTAssertGreaterThan(offset(), previous + 100)
+        XCTAssertGreaterThan(manager.visibleEpisodeIndex, 0, "Left must enable when the row has moved")
+        let next = offset()
+        manager.scrollEpisodesPrev(from: manager.visibleEpisodeIndex)
+        try await settle()
+        XCTAssertLessThan(offset(), next - 100)
+    }
+
+    @MainActor func testSeasonPillsWrapRatherThanOverflowNarrowScreens() {
+        let manager = IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: "season-layout-\(UUID())")!)
+        defer { manager.stop() }
+        manager.seriesEpisodes = (1...12).map {
+            M3UItem(name: "Episode", groupTitle: "Season \($0)", streamURL: URL(string: "https://fixture.invalid/\($0).mp4")!, contentType: .series)
+        }
+        let hosting = NSHostingController(rootView: IPTVPlaybackView(manager: manager).seasonSelector)
+        let narrow = hosting.sizeThatFits(in: CGSize(width: 320, height: 2000))
+        let wide = hosting.sizeThatFits(in: CGSize(width: 1200, height: 2000))
+        XCTAssertLessThanOrEqual(narrow.width, 320)
+        XCTAssertGreaterThan(narrow.height, wide.height)
+        manager.selectSeason("Season 12")
+        XCTAssertEqual(manager.filteredEpisodesForSelectedSeason.first?.groupTitle, "Season 12")
+    }
+    #endif
+
     private func show(_ id: String) -> M3UItem {
         M3UItem(name: "Show \(id)", streamURL: URL(string: "https://fixture.invalid/provider/series/user/pass/\(id).mp4")!,
                 contentType: .series, seriesID: id)
