@@ -7,6 +7,77 @@ import AppKit
 
 @MainActor
 final class SearchTests: XCTestCase {
+    func testTopShortcutsDoNotIncludeProviderCategories() {
+        XCTAssertEqual(ChannelListView.categoryShortcuts, ["All", "Favorites"])
+    }
+
+    func testReturningToAllRestoresLargeLibraryWithoutReplacingPlayer() async throws {
+        let suite = "category-tests-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let items = (0..<10_000).map {
+            M3UItem(name: "Movie \($0)", groupTitle: $0 == 0 ? "Small" : "Large",
+                    streamURL: URL(fileURLWithPath: "/private/tmp/category-fixture-\($0).mp4"), contentType: .movie)
+        }
+        var loader = LibraryLoader()
+        loader.playlist = { _ in items }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
+        manager.selectedSection = .movie
+        await manager.loadPlaylist(from: "https://fixture.invalid/categories.m3u")
+        manager.playDirectStream(items[0])
+        manager.player?.replaceCurrentItem(with: nil)
+        let player = try XCTUnwrap(manager.player)
+        manager.toggleFavorite(items[0])
+        XCTAssertTrue(manager.categories.contains("Small"), "Provider categories must remain available in the sidebar")
+
+        #if os(macOS)
+        let hosting = NSHostingView(rootView: ChannelListView(manager: manager))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 360, height: 700),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.close() }
+        func table(in view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            return view.subviews.lazy.compactMap { table(in: $0) }.first
+        }
+        #endif
+        for category in ["Favorites", "Small", "Favorites"] {
+            manager.selectedCategory = category
+            XCTAssertEqual(manager.filteredChannels.count, 1)
+            #if os(macOS)
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 20_000_000)
+            XCTAssertNil(table(in: hosting), "macOS channel rows must not use eager native table height measurement")
+            #endif
+            // List must also reject animation inherited from a parent/sidebar action.
+            withAnimation(.default) { manager.selectedCategory = "All" }
+            XCTAssertEqual(manager.filteredChannels.map(\.id), items.map(\.id))
+            #if os(macOS)
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 20_000_000)
+            XCTAssertNil(table(in: hosting), "Restoring All must stay on the lazy rendering path")
+            #endif
+            XCTAssertTrue(manager.player === player)
+            XCTAssertEqual(manager.currentChannel?.id, items[0].id)
+        }
+        manager.searchText = "Movie 9999"
+        manager.selectedCategory = "Favorites"
+        XCTAssertTrue(manager.filteredChannels.isEmpty)
+        manager.selectedCategory = "All"
+        XCTAssertEqual(manager.filteredChannels.map(\.id), [items[9999].id])
+        XCTAssertEqual(manager.searchText, "Movie 9999")
+        manager.searchText = ""
+        manager.toggleFavorite(items[0])
+        manager.selectedCategory = "Favorites"
+        XCTAssertTrue(manager.filteredChannels.isEmpty)
+        manager.selectedCategory = "All"
+        XCTAssertEqual(manager.filteredChannels.count, items.count)
+        XCTAssertTrue(manager.player === player)
+        await manager.libraryPersistence.waitForIdle()
+    }
+
     func testClearMatchesManualDeletionAndPreservesCategoryAndPlayback() async throws {
         let suite = "search-tests-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!

@@ -12,6 +12,7 @@ import SwiftUI
 public struct ChannelListView: View {
     
     @ObservedObject var manager: IPTVPlayerManager
+    static let categoryShortcuts = ["All", "Favorites"]
     
     public init(manager: IPTVPlayerManager) {
         self.manager = manager
@@ -101,16 +102,14 @@ public struct ChannelListView: View {
         }
     }
     
-    /// Horizontal category scroll view
+    /// Provider categories belong in the sidebar, not the top shortcuts.
     private var categoryFilterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(manager.categories, id: \.self) { category in
+                ForEach(Self.categoryShortcuts, id: \.self) { category in
                     let isSelected = manager.selectedCategory == category
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            manager.selectedCategory = category
-                        }
+                        manager.selectedCategory = category
                     } label: {
                         HStack(spacing: 6) {
                             if category == "Favorites" || category == "★ Favorites" {
@@ -141,23 +140,41 @@ public struct ChannelListView: View {
     
     /// Main Channel List
     private var channelListContent: some View {
-        List(manager.filteredChannels) { channel in
-            ChannelRowView(
-                channel: channel,
-                isPlaying: manager.currentChannel?.id == channel.id,
-                onSelect: {
-                    manager.playChannel(channel)
-                },
-                onToggleFavorite: {
-                    manager.toggleFavorite(channel)
-                }
-            )
-            .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+        Group {
             #if os(macOS)
-            .listRowSeparator(.visible)
+            // NSTableView measures inserted rows eagerly; All can exhaust SwiftUI's graph storage.
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(manager.filteredChannels) { channel in
+                        channelRow(channel)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                        Divider().padding(.leading, 12)
+                    }
+                }
+            }
+            #else
+            List(manager.filteredChannels) { channel in
+                channelRow(channel)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+            }
+            .listStyle(.plain)
             #endif
         }
-        .listStyle(.plain)
+        .transaction {
+            // Restoring All can insert thousands of rows in a single update.
+            $0.animation = nil
+            $0.disablesAnimations = true
+        }
+    }
+
+    private func channelRow(_ channel: M3UItem) -> some View {
+        ChannelRowView(
+            channel: channel,
+            isPlaying: manager.currentChannel?.id == channel.id,
+            onSelect: { manager.playChannel(channel) },
+            onToggleFavorite: { manager.toggleFavorite(channel) }
+        )
     }
     
     /// Loading indicator
@@ -191,7 +208,7 @@ public struct ChannelListView: View {
                 
                 Button("Clear Search", action: clearSearch)
                 .buttonStyle(.borderedProminent)
-            } else if manager.selectedCategory == "★ Favorites" {
+            } else if manager.selectedCategory == "Favorites" || manager.selectedCategory == "★ Favorites" {
                 Text("You haven't added any favorite channels yet. Tap the star icon on any channel to add it here.")
                     .font(.caption)
                     .foregroundColor(.secondary)
