@@ -414,12 +414,18 @@ public actor XtreamCodesManager {
         }
         
         let data = try await performRequest(url: url)
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let streamBase = URL(string: "\(cleanBase)/series/\(userEnc)/\(passEnc)/") else { throw XtreamCodesError.invalidServerURL }
+        return try Self.parseSeriesEpisodes(data, streamBase: streamBase, seriesID: String(seriesId))
+    }
+
+    static func parseSeriesEpisodes(_ data: Data, streamBase: URL, seriesID: String) throws -> [M3UItem] {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let episodesDict = json["episodes"] as? [String: [[String: Any]]] else {
-            return []
+            throw XtreamCodesError.invalidResponse
         }
         
         var episodeItems: [M3UItem] = []
+        let providerBase = streamBase.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("")
         let sortedSeasons = episodesDict.keys.sorted { (Int($0) ?? 0) < (Int($1) ?? 0) }
         
         for seasonKey in sortedSeasons {
@@ -429,13 +435,14 @@ public actor XtreamCodesManager {
                 let epIdStr = "\(epId)"
                 let title = (ep["title"] as? String) ?? "Episode \(ep["episode_num"] ?? "")"
                 let ext = (ep["container_extension"] as? String) ?? "mp4"
+                guard !epIdStr.isEmpty, epIdStr.allSatisfy({ $0.isASCII && $0.isNumber }),
+                      !ext.isEmpty, ext.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { continue }
                 let episodeInfo = ep["info"] as? [String: Any] ?? [:]
                 let artworkString = ["movie_image", "cover", "image"]
                     .compactMap { episodeInfo[$0] as? String }
                     .first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
                 let artworkURL = artworkString.flatMap { URL(string: $0) }
-                let streamEndpoint = "\(cleanBase)/series/\(userEnc)/\(passEnc)/\(epIdStr).\(ext)"
-                guard let finalURL = URL(string: streamEndpoint) else { continue }
+                let finalURL = streamBase.appendingPathComponent("\(epIdStr).\(ext)")
                 
                 episodeItems.append(
                     M3UItem(
@@ -445,11 +452,11 @@ public actor XtreamCodesManager {
                         streamURL: finalURL,
                         contentType: .series,
                         mediaID: epIdStr,
-                        seriesID: String(seriesId),
+                        seriesID: seriesID,
                         seasonNumber: Int(seasonKey),
                         episodeNumber: Int("\(ep["episode_num"] ?? "")"),
-                        subtitleSources: SubtitleSource.fromMetadata(episodeInfo, relativeTo: URL(string: cleanBase + "/"))
-                            + SubtitleSource.fromMetadata(ep, relativeTo: URL(string: cleanBase + "/"))
+                        subtitleSources: SubtitleSource.fromMetadata(episodeInfo, relativeTo: providerBase)
+                            + SubtitleSource.fromMetadata(ep, relativeTo: providerBase)
                     )
                 )
             }
@@ -473,13 +480,35 @@ public actor XtreamCodesManager {
             json["movie_data"] as? [String: Any] ?? [:]].flatMap { SubtitleSource.fromMetadata($0, relativeTo: base) }
     }
 
+    func fetchMovieDetails(for item: M3UItem) async throws -> MediaDetails? {
+        guard let url = subtitleRequest(for: item) else { return nil }
+        return try MediaDetails.parse(try await performRequest(url: url))
+    }
+
+    func fetchSeriesDetails(for item: M3UItem) async throws -> SeriesDetails {
+        guard let url = infoRequest(for: item), item.contentType == .series else {
+            return SeriesDetails(details: nil, episodes: [item])
+        }
+        let data = try await performRequest(url: url)
+        let details = try? MediaDetails.parse(data)
+        let episodes = try Self.parseSeriesEpisodes(data, streamBase: item.streamURL.deletingLastPathComponent(),
+                                                   seriesID: item.seriesID ?? item.streamURL.deletingPathExtension().lastPathComponent)
+        return SeriesDetails(details: details, episodes: episodes)
+    }
+
     /// Derive the provider and account from this stream, rather than using a saved
     /// account that may belong to a different playlist. Preserve provider subpaths.
     func subtitleRequest(for item: M3UItem) -> URL? {
+        guard item.contentType == .movie else { return nil }
+        return infoRequest(for: item)
+    }
+
+    func infoRequest(for item: M3UItem) -> URL? {
         let path = item.streamURL.pathComponents
-        guard item.contentType == .movie,
-              let movieIndex = path.lastIndex(of: "movie"), path.count == movieIndex + 4,
-              let mediaID = item.mediaID ?? Int(item.streamURL.deletingPathExtension().lastPathComponent).map(String.init),
+        guard item.contentType == .movie || item.contentType == .series else { return nil }
+        let series = item.contentType == .series
+        guard let movieIndex = path.lastIndex(of: series ? "series" : "movie"), path.count == movieIndex + 4,
+              let mediaID = (series ? item.seriesID : item.mediaID) ?? Int(item.streamURL.deletingPathExtension().lastPathComponent).map(String.init),
               var components = URLComponents(url: item.streamURL, resolvingAgainstBaseURL: true),
               ["http", "https"].contains(components.scheme?.lowercased() ?? "") else { return nil }
         components.path = "/" + path.dropFirst().prefix(movieIndex - 1).joined(separator: "/")
@@ -487,8 +516,8 @@ public actor XtreamCodesManager {
         components.queryItems = [
             URLQueryItem(name: "username", value: path[movieIndex + 1]),
             URLQueryItem(name: "password", value: path[movieIndex + 2]),
-            URLQueryItem(name: "action", value: "get_vod_info"),
-            URLQueryItem(name: "vod_id", value: mediaID)
+            URLQueryItem(name: "action", value: series ? "get_series_info" : "get_vod_info"),
+            URLQueryItem(name: series ? "series_id" : "vod_id", value: mediaID)
         ]
         components.fragment = nil
         return components.url

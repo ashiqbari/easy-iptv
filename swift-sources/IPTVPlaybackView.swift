@@ -28,7 +28,9 @@ public struct IPTVPlaybackView: View {
             // Background deep canvas
             Color.black.ignoresSafeArea()
             
-            if manager.currentChannel?.contentType == .series && manager.isViewingSeriesDetails {
+            if manager.isViewingMovieDetails, let movie = manager.movieOverviewItem {
+                MovieDetailsView(item: movie, manager: manager)
+            } else if manager.currentChannel?.contentType == .series && manager.isViewingSeriesDetails {
                 // TV Series Overview & Seasons/Episodes Hero Page (Screenshot 3 Reference UI)
                 seriesHeroView
             } else {
@@ -171,6 +173,16 @@ public struct IPTVPlaybackView: View {
     private var topBar: some View {
         HStack(alignment: .center, spacing: 12) {
             if let channel = manager.currentChannel {
+                if channel.contentType == .movie {
+                    Button { manager.returnToMovie() } label: {
+                        Label("Back to Movie Details", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(.white)
+                    .padding(10)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(8)
+                }
                 // Return to TV Series Overview Button
                 if channel.contentType == .series || manager.selectedSection == .series {
                     Button {
@@ -682,95 +694,33 @@ public struct IPTVPlaybackView: View {
                 
                 VStack(alignment: .leading, spacing: 24) {
                     if let channel = manager.currentChannel {
+                        if let backdrop = manager.seriesDetails?.backdrop {
+                            AsyncImage(url: backdrop) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: { Color.white.opacity(0.08) }
+                            .frame(height: 180).clipped().cornerRadius(12)
+                            .padding(.horizontal, 32)
+                            .accessibilityHidden(true)
+                        }
                         // Hero Top Banner with Poster & Metadata
                         HStack(alignment: .top, spacing: 28) {
-                            if let logo = channel.logoURL {
-                                AsyncImage(url: logo) { phase in
-                                    switch phase {
-                                    case .success(let image):
-                                        image.resizable()
-                                             .scaledToFill()
-                                             .frame(width: 150, height: 225)
-                                             .cornerRadius(12)
-                                             .shadow(color: .black.opacity(0.6), radius: 16, x: 0, y: 8)
-                                    default:
-                                        fallbackHeroPoster
-                                    }
-                                }
-                            } else {
-                                fallbackHeroPoster
-                            }
+                            HeroArtworkView(url: manager.seriesDetails?.poster ?? channel.logoURL, symbol: "play.tv.fill")
                             
                             VStack(alignment: .leading, spacing: 12) {
-                                Text(channel.name)
+                                Text(manager.seriesDetails?.title ?? channel.name)
                                     .font(.system(size: 32, weight: .bold))
                                     .foregroundColor(.white)
                                     .lineLimit(2)
                                 
-                                HStack(spacing: 8) {
-                                    Text("2024")
-                                        .font(.caption.bold())
-                                        .foregroundColor(.white.opacity(0.9))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(Color.white.opacity(0.15))
-                                        .cornerRadius(6)
-                                    
-                                    Text(channel.displayGroup)
-                                        .font(.caption.bold())
-                                        .foregroundColor(.white.opacity(0.9))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(Color.white.opacity(0.15))
-                                        .cornerRadius(6)
-                                    
-                                    Text("45 min/ep")
-                                        .font(.caption.bold())
-                                        .foregroundColor(.white.opacity(0.9))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(Color.white.opacity(0.15))
-                                        .cornerRadius(6)
-                                    
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "star.fill")
-                                            .font(.caption2)
-                                            .foregroundColor(.yellow)
-                                        Text("9.0")
-                                            .font(.caption.bold())
-                                            .foregroundColor(.white)
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 4)
-                                    .background(Color.yellow.opacity(0.2))
-                                    .cornerRadius(6)
-                                }
-                                
-                                Text("In a ruined and toxic future, a community exists in a giant underground silo that plunges hundreds of stories deep. There, men and women live in a society full of regulations they believe are meant to protect them.")
+                                MediaMetadataView(details: manager.seriesDetails)
+                                MediaDescriptionView(details: manager.seriesDetails)
                                     .font(.subheadline)
-                                    .foregroundColor(.white.opacity(0.8))
-                                    .lineLimit(3)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                
-                                HStack(spacing: 40) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Cast")
-                                            .font(.caption2.bold())
-                                            .foregroundColor(.gray)
-                                        Text("Rebecca Ferguson, Rashida Jones, David Oyelowo, Common")
-                                            .font(.caption)
-                                            .foregroundColor(.white.opacity(0.9))
-                                            .lineLimit(1)
-                                    }
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("Director")
-                                            .font(.caption2.bold())
-                                            .foregroundColor(.gray)
-                                        Text("Graham Yost")
-                                            .font(.caption)
-                                            .foregroundColor(.white.opacity(0.9))
-                                    }
+                                if manager.isLoadingEpisodes {
+                                    ProgressView("Loading series details…")
+                                }
+                                if manager.seriesDetailsFailed {
+                                    Text("Series details couldn't be loaded.").font(.caption).foregroundStyle(.secondary)
+                                    Button("Retry") { manager.fetchAndShowSeries(channel) }
                                 }
                                 
                                 HStack(spacing: 12) {
@@ -787,7 +737,7 @@ public struct IPTVPlaybackView: View {
                                             VStack(alignment: .leading, spacing: 1) {
                                                 Text(manager.continueWatchingEpisode == nil ? "Play first episode" : "Continue watching")
                                                     .font(.subheadline.bold())
-                                                Text(manager.continueWatchingEpisode?.name ?? manager.seriesEpisodes.first?.name ?? "Season 1 • Episode 1")
+                                                Text(manager.continueWatchingEpisode?.name ?? manager.seriesEpisodes.first?.name ?? (manager.isLoadingEpisodes ? "Loading episodes…" : "No episodes available"))
                                                     .font(.caption2)
                                                     .foregroundColor(.black.opacity(0.7))
                                                     .lineLimit(1)
@@ -921,7 +871,7 @@ public struct IPTVPlaybackView: View {
                             }
                             
                             if manager.seriesEpisodes.isEmpty && !manager.isLoadingEpisodes {
-                                Text("No episode listings returned by server for this title. You can play directly or select another show.")
+                                Text("No episode listings available for this title. Try again or select another show.")
                                     .font(.subheadline)
                                     .foregroundColor(.gray)
                                     .padding(.horizontal, 32)
@@ -954,7 +904,7 @@ public struct IPTVPlaybackView: View {
                                                 Text(ep.groupTitle)
                                                     .font(.caption2)
                                                     .foregroundColor(.gray)
-                                                EpisodeProgressView(store: manager.progressStore, item: ep)
+                                                MediaProgressView(store: manager.progressStore, item: ep)
                                             }
                                             .padding(8)
                                             .background(Color.white.opacity(0.05))
@@ -998,7 +948,7 @@ public struct IPTVPlaybackView: View {
                                                         Text(ep.groupTitle)
                                                             .font(.caption2)
                                                             .foregroundColor(.gray)
-                                                        EpisodeProgressView(store: manager.progressStore, item: ep)
+                                                        MediaProgressView(store: manager.progressStore, item: ep)
                                                             .frame(width: 220, alignment: .leading)
                                                     }
                                                 }
@@ -1022,17 +972,6 @@ public struct IPTVPlaybackView: View {
             }
             .padding(.bottom, 40)
         }
-    }
-    
-    private var fallbackHeroPoster: some View {
-        RoundedRectangle(cornerRadius: 12)
-            .fill(Color.purple.opacity(0.2))
-            .frame(width: 140, height: 210)
-            .overlay(
-                Image(systemName: "play.tv.fill")
-                    .font(.system(size: 44))
-                    .foregroundColor(.purple)
-            )
     }
     
     /// Placeholder state when no channel is selected.
@@ -1118,7 +1057,7 @@ public struct IPTVPlaybackView: View {
                                         Text(ep.groupTitle)
                                             .font(.caption2)
                                             .foregroundColor(.white.opacity(0.6))
-                                        EpisodeProgressView(store: manager.progressStore, item: ep)
+                                        MediaProgressView(store: manager.progressStore, item: ep)
                                     }
                                     Spacer()
                                 }
@@ -1141,7 +1080,7 @@ public struct IPTVPlaybackView: View {
     }
 }
 
-private struct EpisodeProgressView: View {
+struct MediaProgressView: View {
     @ObservedObject var store: PlaybackProgressStore
     let item: M3UItem
 

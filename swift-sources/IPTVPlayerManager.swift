@@ -304,6 +304,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Flag indicating if user is on the rich TV Series overview & episodes page.
     @Published public var isViewingSeriesDetails: Bool = false
+    @Published private(set) var seriesDetails: MediaDetails?
+    @Published private(set) var seriesDetailsFailed = false
+    @Published private(set) var isViewingMovieDetails = false
+    @Published private(set) var movieOverviewItem: M3UItem?
     
     /// Loading indicator for series episode resolution.
     @Published public var isLoadingEpisodes: Bool = false
@@ -622,20 +626,48 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     // MARK: - Playback Control
     
-    /// Selects a channel or VOD item and begins hardware-accelerated playback.
-    /// For TV Shows, it opens the rich Series Overview & Episodes browser first.
+    /// Opens movie/series details, or begins playback for a live channel.
     /// - Parameter item: The target channel or show.
     public func playChannel(_ item: M3UItem) {
+        if item.contentType == .movie {
+            showMovieDetails(item)
+            return
+        }
         if item.contentType == .series {
             fetchAndShowSeries(item)
             return
         }
-        // Immediately reset and dismiss series episode options when switching to Live TV or Movies
+        // Reset series options when switching to Live TV.
         seriesOverviewItem = nil
         self.isViewingSeriesDetails = false
         self.seriesEpisodes = []
         self.showingEpisodesDrawer = false
         playDirectStream(item)
+    }
+
+    func showMovieDetails(_ item: M3UItem) {
+        stop()
+        movieOverviewItem = item
+        currentChannel = item
+        isViewingMovieDetails = true
+    }
+
+    func playMovie(startOver: Bool = false) {
+        guard let item = movieOverviewItem else { return }
+        if startOver { progressStore.clear(item) }
+        continueWatching(item)
+        showVideoControls = true
+        scheduleControlsAutoHide()
+    }
+
+    func returnToMovie() {
+        guard let item = movieOverviewItem ?? currentChannel, item.contentType == .movie else { return }
+        tearDownPlayback()
+        resumeRequest = nil
+        currentChannel = item
+        movieOverviewItem = item
+        isViewingMovieDetails = true
+        showVideoControls = true
     }
     
     /// Plays an individual stream, movie, or resolved TV episode directly.
@@ -698,6 +730,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         #endif
         self.currentChannel = item
         self.isViewingSeriesDetails = false
+        self.isViewingMovieDetails = false
+        movieOverviewItem = item.contentType == .movie ? item : nil
         self.useVLCPlayback = false
         if item.contentType != .series {
             self.seriesEpisodes = []
@@ -797,6 +831,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Queries the Xtream server for a TV show's seasons and episodes,
     /// stops playback, and presents the rich Series Overview & Episodes grid first.
     public func fetchAndShowSeries(_ item: M3UItem) {
+        movieOverviewItem = nil
+        isViewingMovieDetails = false
         seriesLoadTask?.cancel()
         seriesGeneration = UUID()
         let generation = seriesGeneration
@@ -810,41 +846,22 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         self.errorMessage = nil
         self.isLoadingEpisodes = true
         self.seriesEpisodes = []
-        
-        // Extract series ID from URL path (e.g. /series/user/pass/123.mp4)
-        var seriesId = Int(item.seriesID ?? "") ?? 0
-        let urlStr = item.streamURL.absoluteString
-        if seriesId == 0, let match = urlStr.range(of: #"/series/[^/]+/[^/]+/(\d+)"#, options: .regularExpression) {
-            let sub = urlStr[match]
-            if let lastSlash = sub.lastIndex(of: "/"), let parsed = Int(sub[sub.index(after: lastSlash)...]) {
-                seriesId = parsed
-            }
-        }
-        
-        let server = self.xtreamServerURL
-        let user = self.xtreamUsername
-        let pass = self.xtreamPassword
-        
-        let service = xtreamManager
+        seriesDetails = nil
+        seriesDetailsFailed = false
+        let loadDetails = libraryLoader.seriesDetails
         seriesLoadTask = Task { [weak self] in
             do {
-                let eps = try await service.fetchSeriesEpisodes(
-                    serverURL: server,
-                    username: user,
-                    password: pass,
-                    seriesId: seriesId
-                )
+                let result = try await loadDetails(item)
                 guard let self, !Task.isCancelled, self.seriesGeneration == generation,
                       self.seriesOverviewItem?.id == item.id else { return }
-                self.seriesEpisodes = eps
+                self.seriesEpisodes = result.episodes
+                self.seriesDetails = result.details
                 self.isLoadingEpisodes = false
             } catch {
                 guard let self, !Task.isCancelled, self.seriesGeneration == generation,
                       self.seriesOverviewItem?.id == item.id else { return }
                 self.isLoadingEpisodes = false
-                if self.seriesEpisodes.isEmpty {
-                    self.seriesEpisodes = [item]
-                }
+                self.seriesDetailsFailed = true
             }
             guard let self, self.seriesGeneration == generation else { return }
             self.seriesLoadTask = nil
@@ -1104,6 +1121,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         tearDownPlayback()
         resumeRequest = nil
         seriesOverviewItem = nil
+        seriesDetails = nil
+        seriesDetailsFailed = false
+        movieOverviewItem = nil
+        isViewingMovieDetails = false
         self.currentChannel = nil
         self.seriesEpisodes = []
         self.showingEpisodesDrawer = false

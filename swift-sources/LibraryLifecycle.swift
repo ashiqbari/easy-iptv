@@ -6,12 +6,14 @@ struct LibraryLoader: Sendable {
     var live: Fetch
     var movies: Fetch
     var series: Fetch
+    var seriesDetails: @Sendable (M3UItem) async throws -> SeriesDetails
     var playlist: @Sendable (URL) async throws -> [M3UItem]
 
     init(service: XtreamCodesManager = XtreamCodesManager(), parser: M3UParser = M3UParser()) {
         live = { try await service.fetchLiveChannels(serverURL: $0, username: $1, password: $2) }
         movies = { try await service.fetchVodStreams(serverURL: $0, username: $1, password: $2) }
         series = { try await service.fetchSeries(serverURL: $0, username: $1, password: $2) }
+        seriesDetails = { try await service.fetchSeriesDetails(for: $0) }
         playlist = { try await parser.parse(from: $0) }
     }
 }

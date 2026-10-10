@@ -157,6 +157,33 @@ final class PlaybackProgressTests: XCTestCase {
         XCTAssertFalse(manager.isPlaying)
     }
 
+    @MainActor func testMovieDetailsBackSavesClockAndResumeSeeksAfterMetadata() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        let item = media(url: url, type: .movie)
+        manager.playChannel(item)
+        XCTAssertNil(manager.player)
+        manager.playMovie()
+        let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
+        XCTAssertTrue(ready)
+        let player = try XCTUnwrap(manager.player)
+        player.pause()
+        await withCheckedContinuation { continuation in
+            player.seek(to: CMTime(seconds: 120, preferredTimescale: 600), toleranceBefore: .zero,
+                        toleranceAfter: .zero) { _ in continuation.resume() }
+        }
+        manager.returnToMovie()
+        XCTAssertTrue(manager.isViewingMovieDetails)
+        XCTAssertNil(player.currentItem)
+        XCTAssertEqual(manager.progressStore.progress(for: item)?.position ?? 0, 120, accuracy: 1)
+        manager.playMovie()
+        let resumed = await waitUntil { (manager.player?.currentTime().seconds ?? 0) >= 119 }
+        XCTAssertTrue(resumed)
+        XCTAssertNil(manager.resumeRequest)
+    }
+
     @MainActor func testResumeSeeksAfterMetadataAndStartOverClearsProgress() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
