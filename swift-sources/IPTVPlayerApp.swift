@@ -8,6 +8,32 @@
 import SwiftUI
 import AVFoundation
 
+enum AppearancePreference: String, CaseIterable {
+    static let storageKey = "appearance"
+    case system, light, dark
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
+struct AppearancePicker: View {
+    @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
+
+    var body: some View {
+        Picker("Appearance", selection: $appearance) {
+            ForEach(AppearancePreference.allCases, id: \.self) { option in
+                Text(option.rawValue.capitalized).tag(option)
+            }
+        }
+        .pickerStyle(.inline)
+    }
+}
+
 #if os(macOS)
 import AppKit
 
@@ -65,6 +91,9 @@ struct IPTVPlayerApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1320, height: 820)
         .commands {
+            CommandMenu("Appearance") {
+                AppearancePicker()
+            }
             // Media Playback menu in macOS top bar
             CommandMenu("Playback") {
                 Button(manager.isPlaying ? "Pause" : "Play") {

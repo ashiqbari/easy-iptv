@@ -42,6 +42,7 @@ public struct ContentView: View {
     // MARK: - State Management
     
     @ObservedObject var manager: IPTVPlayerManager
+    @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
     #if os(macOS)
     @State private var playbackBounds: CGRect = .zero
     #endif
@@ -111,6 +112,16 @@ public struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
             manager.updateFullscreenState(false)
         }
+        // AppKit avoids stale SwiftUI colors when returning to System appearance.
+        .onChange(of: appearance, initial: true) { _, preference in
+            switch preference {
+            case .system: NSApplication.shared.appearance = nil
+            case .light: NSApplication.shared.appearance = NSAppearance(named: .aqua)
+            case .dark: NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+            }
+        }
+        #else
+        .preferredColorScheme(appearance.colorScheme)
         #endif
     }
 
@@ -314,6 +325,13 @@ public struct ContentView: View {
         .navigationTitle("IPTV Library")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
+                Menu {
+                    AppearancePicker()
+                } label: {
+                    Label("Appearance", systemImage: "circle.lefthalf.filled")
+                }
+                .help("Choose System, Light, or Dark appearance")
+
                 Button {
                     manager.showingPlaylistSheet = true
                 } label: {

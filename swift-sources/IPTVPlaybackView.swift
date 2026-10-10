@@ -685,7 +685,7 @@ public struct IPTVPlaybackView: View {
             ZStack(alignment: .top) {
                 // Top warm ambient glow matching screenshot 3
                 LinearGradient(
-                    colors: [Color.orange.opacity(0.3), Color.black.opacity(0.8), Color.black],
+                    colors: [Color.orange.opacity(0.3), Color.clear],
                     startPoint: .top,
                     endPoint: .bottom
                 )
@@ -697,7 +697,7 @@ public struct IPTVPlaybackView: View {
                         if let backdrop = manager.seriesDetails?.backdrop {
                             AsyncImage(url: backdrop) { image in
                                 image.resizable().scaledToFill()
-                            } placeholder: { Color.white.opacity(0.08) }
+                            } placeholder: { Color.primary.opacity(0.08) }
                             .frame(height: 180).clipped().cornerRadius(12)
                             .padding(.horizontal, 32)
                             .accessibilityHidden(true)
@@ -709,7 +709,7 @@ public struct IPTVPlaybackView: View {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text(manager.seriesDetails?.title ?? channel.name)
                                     .font(.system(size: 32, weight: .bold))
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.primary)
                                     .lineLimit(2)
                                 
                                 MediaMetadataView(details: manager.seriesDetails)
@@ -739,14 +739,14 @@ public struct IPTVPlaybackView: View {
                                                     .font(.subheadline.bold())
                                                 Text(manager.continueWatchingEpisode?.name ?? manager.seriesEpisodes.first?.name ?? (manager.isLoadingEpisodes ? "Loading episodes…" : "No episodes available"))
                                                     .font(.caption2)
-                                                    .foregroundColor(.black.opacity(0.7))
+                                                    .foregroundColor(.white.opacity(0.85))
                                                     .lineLimit(1)
                                             }
                                         }
-                                        .foregroundColor(.black)
+                                        .foregroundColor(.white)
                                         .padding(.horizontal, 22)
                                         .padding(.vertical, 10)
-                                        .background(Color.white)
+                                        .background(Color.accentColor)
                                         .cornerRadius(10)
                                         .shadow(color: .blue.opacity(0.3), radius: 12, x: 0, y: 4)
                                     }
@@ -758,14 +758,14 @@ public struct IPTVPlaybackView: View {
                                     } label: {
                                         HStack(spacing: 6) {
                                             Image(systemName: manager.isFavorite(channel) ? "star.fill" : "plus")
-                                                .foregroundColor(manager.isFavorite(channel) ? .yellow : .white)
+                                                .foregroundColor(manager.isFavorite(channel) ? .yellow : .primary)
                                             Text(manager.isFavorite(channel) ? "Favorited" : "Add to favorites")
                                                 .font(.subheadline.weight(.medium))
                                         }
-                                        .foregroundColor(.white)
+                                        .foregroundColor(.primary)
                                         .padding(.horizontal, 18)
                                         .padding(.vertical, 12)
-                                        .background(Color.white.opacity(0.12))
+                                        .background(Color.primary.opacity(0.12))
                                         .cornerRadius(10)
                                     }
                                     .buttonStyle(.plain)
@@ -783,7 +783,7 @@ public struct IPTVPlaybackView: View {
                             HStack(alignment: .center, spacing: 12) {
                                 Text("Seasons and Episodes")
                                     .font(.title2.bold())
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.primary)
                                 
                                 Spacer()
                                 
@@ -796,10 +796,10 @@ public struct IPTVPlaybackView: View {
                                         Text(manager.isSeriesGridView ? "Carousel View" : "Grid View")
                                     }
                                     .font(.caption.bold())
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.primary)
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 6)
-                                    .background(Color.white.opacity(0.15))
+                                    .background(Color.primary.opacity(0.15))
                                     .cornerRadius(20)
                                 }
                                 .buttonStyle(.plain)
@@ -813,9 +813,9 @@ public struct IPTVPlaybackView: View {
                                         } label: {
                                             Image(systemName: "chevron.left")
                                                 .font(.caption.bold())
-                                                .foregroundColor(.white)
+                                                .foregroundColor(.primary)
                                                 .frame(width: 28, height: 28)
-                                                .background(Color.white.opacity(0.15))
+                                                .background(Color.primary.opacity(0.15))
                                                 .clipShape(Circle())
                                         }
                                         .buttonStyle(.plain)
@@ -826,9 +826,9 @@ public struct IPTVPlaybackView: View {
                                         } label: {
                                             Image(systemName: "chevron.right")
                                                 .font(.caption.bold())
-                                                .foregroundColor(.white)
+                                                .foregroundColor(.primary)
                                                 .frame(width: 28, height: 28)
-                                                .background(Color.white.opacity(0.15))
+                                                .background(Color.primary.opacity(0.15))
                                                 .clipShape(Circle())
                                         }
                                         .buttonStyle(.plain)
@@ -858,10 +858,10 @@ public struct IPTVPlaybackView: View {
                                                         .opacity(0.85)
                                                 }
                                             }
-                                            .foregroundColor(isSelected ? .black : .white)
+                                            .foregroundColor(isSelected ? .white : .primary)
                                             .padding(.horizontal, 16)
                                             .padding(.vertical, 8)
-                                            .background(isSelected ? Color.white : Color.white.opacity(0.12))
+                                            .background(isSelected ? Color.accentColor : Color.primary.opacity(0.12))
                                             .cornerRadius(20)
                                         }
                                         .buttonStyle(.plain)
@@ -873,7 +873,7 @@ public struct IPTVPlaybackView: View {
                             if manager.seriesEpisodes.isEmpty && !manager.isLoadingEpisodes {
                                 Text("No episode listings available for this title. Try again or select another show.")
                                     .font(.subheadline)
-                                    .foregroundColor(.gray)
+                                    .foregroundColor(.secondary)
                                     .padding(.horizontal, 32)
                             } else if manager.isSeriesGridView {
                                 // Full Multi-Column Grid View (All episodes visible at once!)
@@ -898,16 +898,16 @@ public struct IPTVPlaybackView: View {
 
                                                 Text(ep.name)
                                                     .font(.caption.weight(.semibold))
-                                                    .foregroundColor(.white)
+                                                    .foregroundColor(.primary)
                                                     .lineLimit(1)
                                                 
                                                 Text(ep.groupTitle)
                                                     .font(.caption2)
-                                                    .foregroundColor(.gray)
+                                                    .foregroundColor(.secondary)
                                                 MediaProgressView(store: manager.progressStore, item: ep)
                                             }
                                             .padding(8)
-                                            .background(Color.white.opacity(0.05))
+                                            .background(Color.primary.opacity(0.05))
                                             .cornerRadius(10)
                                         }
                                         .buttonStyle(.plain)
@@ -941,13 +941,13 @@ public struct IPTVPlaybackView: View {
                                                         
                                                         Text(ep.name)
                                                             .font(.caption.weight(.semibold))
-                                                            .foregroundColor(.white)
+                                                            .foregroundColor(.primary)
                                                             .lineLimit(1)
                                                             .frame(width: 220, alignment: .leading)
                                                         
                                                         Text(ep.groupTitle)
                                                             .font(.caption2)
-                                                            .foregroundColor(.gray)
+                                                            .foregroundColor(.secondary)
                                                         MediaProgressView(store: manager.progressStore, item: ep)
                                                             .frame(width: 220, alignment: .leading)
                                                     }
@@ -972,6 +972,8 @@ public struct IPTVPlaybackView: View {
             }
             .padding(.bottom, 40)
         }
+        .foregroundStyle(.primary)
+        .background(.background)
     }
     
     /// Placeholder state when no channel is selected.
@@ -1109,7 +1111,7 @@ private struct EpisodeArtworkView: View {
 
     var body: some View {
         ZStack {
-            Color.white.opacity(0.08)
+            Color.primary.opacity(0.08)
 
             if let url {
                 AsyncImage(url: url) { phase in
@@ -1138,9 +1140,9 @@ private struct EpisodeArtworkView: View {
     private var placeholder: some View {
         Image(systemName: "photo")
             .font(.title2)
-            .foregroundColor(.white.opacity(0.35))
+            .foregroundColor(.secondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.white.opacity(0.08))
+            .background(Color.primary.opacity(0.08))
     }
 }
 
@@ -1191,7 +1193,7 @@ public struct NativeEPGSheetView: View {
                                 HStack(spacing: 6) {
                                     Text(channel.name)
                                         .font(.headline.bold())
-                                        .foregroundColor(.white)
+                                        .foregroundColor(.primary)
                                     
                                     Text("LIVE EPG")
                                         .font(.caption2.bold())
@@ -1203,7 +1205,7 @@ public struct NativeEPGSheetView: View {
                                 }
                                 Text(channel.displayGroup)
                                     .font(.caption)
-                                    .foregroundColor(.gray)
+                                    .foregroundColor(.secondary)
                             }
                         }
                         .padding(.horizontal, 20)
@@ -1241,23 +1243,23 @@ public struct NativeEPGSheetView: View {
                                     
                                     Text(current.timeRange)
                                         .font(.caption.monospacedDigit())
-                                        .foregroundColor(.white.opacity(0.9))
+                                        .foregroundColor(.primary)
                                 }
                                 
                                 Text(current.title)
                                     .font(.title3.bold())
-                                    .foregroundColor(.white)
+                                    .foregroundColor(.primary)
                                 
                                 Text(current.description)
                                     .font(.subheadline)
-                                    .foregroundColor(.white.opacity(0.8))
+                                    .foregroundColor(.secondary)
                                 
                                 // Progress bar
                                 VStack(spacing: 4) {
                                     GeometryReader { geo in
                                         ZStack(alignment: .leading) {
                                             RoundedRectangle(cornerRadius: 3)
-                                                .fill(Color.white.opacity(0.15))
+                                                .fill(Color.primary.opacity(0.15))
                                             RoundedRectangle(cornerRadius: 3)
                                                 .fill(Color.blue)
                                                 .frame(width: geo.size.width * CGFloat(current.progress(at: now)))
@@ -1272,13 +1274,13 @@ public struct NativeEPGSheetView: View {
                                         Spacer()
                                         Text("\(current.durationMin) min total")
                                             .font(.caption2)
-                                            .foregroundColor(.gray)
+                                            .foregroundColor(.secondary)
                                     }
                                 }
                                 .padding(.top, 4)
                             }
                             .padding(16)
-                            .background(Color.white.opacity(0.06))
+                            .background(Color.primary.opacity(0.06))
                             .cornerRadius(12)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)
@@ -1291,7 +1293,7 @@ public struct NativeEPGSheetView: View {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Rest of today's schedule")
                                 .font(.headline.bold())
-                                .foregroundColor(.white)
+                                .foregroundColor(.primary)
                                 .padding(.horizontal, 20)
                             
                             VStack(spacing: 8) {
@@ -1299,10 +1301,10 @@ public struct NativeEPGSheetView: View {
                                     HStack(alignment: .top, spacing: 14) {
                                         Text(item.start.formatted(date: .omitted, time: .shortened))
                                             .font(.caption.bold().monospacedDigit())
-                                            .foregroundColor(.white)
+                                            .foregroundColor(.primary)
                                             .padding(.horizontal, 8)
                                             .padding(.vertical, 4)
-                                            .background(Color.white.opacity(0.12))
+                                            .background(Color.primary.opacity(0.12))
                                             .cornerRadius(6)
                                             .frame(width: 60)
                                         
@@ -1310,7 +1312,7 @@ public struct NativeEPGSheetView: View {
                                             HStack {
                                                 Text(item.title)
                                                     .font(.subheadline.weight(.semibold))
-                                                    .foregroundColor(.white)
+                                                    .foregroundColor(.primary)
                                                 if item.isCurrent(at: now) {
                                                     Text("NOW")
                                                         .font(.system(size: 9, weight: .bold))
@@ -1323,18 +1325,18 @@ public struct NativeEPGSheetView: View {
                                                 Spacer()
                                                 Text("\(item.durationMin)m")
                                                     .font(.caption2.monospacedDigit())
-                                                    .foregroundColor(.gray)
+                                                    .foregroundColor(.secondary)
                                             }
                                             
                                             Text(item.description)
                                                 .font(.caption)
-                                                .foregroundColor(.white.opacity(0.7))
+                                                .foregroundColor(.secondary)
                                                 .lineLimit(2)
                                             Text(item.timeRange).font(.caption2).foregroundStyle(.secondary)
                                         }
                                     }
                                     .padding(12)
-                                    .background(Color.white.opacity(item.isCurrent(at: now) ? 0.08 : 0.03))
+                                    .background(Color.primary.opacity(item.isCurrent(at: now) ? 0.08 : 0.03))
                                     .cornerRadius(8)
                                 }
                             }

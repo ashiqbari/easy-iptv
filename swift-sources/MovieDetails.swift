@@ -111,7 +111,7 @@ struct MovieDetailsView: View {
                 if let backdrop = details?.backdrop {
                     AsyncImage(url: backdrop) { image in
                         image.resizable().scaledToFill()
-                    } placeholder: { Color.white.opacity(0.08) }
+                    } placeholder: { Color.primary.opacity(0.08) }
                     .frame(maxWidth: .infinity).frame(height: 180).clipped().cornerRadius(12)
                     .accessibilityHidden(true)
                 }
@@ -141,8 +141,9 @@ struct MovieDetailsView: View {
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .foregroundStyle(.white)
-        .background(LinearGradient(colors: [.orange.opacity(0.2), .black], startPoint: .top, endPoint: .bottom))
+        .foregroundStyle(.primary)
+        .background(LinearGradient(colors: [.orange.opacity(0.2), .clear], startPoint: .top, endPoint: .bottom))
+        .background(.background)
         .task(id: "\(item.subtitleCacheKey)|\(retry)") {
             details = nil
             loading = true
@@ -201,7 +202,7 @@ struct MediaMetadataView: View {
             if let rating = details?.rating {
                 HStack(spacing: 4) {
                     Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
-                    Text(rating).font(.caption.bold()).foregroundStyle(.white)
+                    Text(rating).font(.caption.bold()).foregroundStyle(.primary)
                 }
                 .padding(.horizontal, 10).padding(.vertical, 4)
                 .background(Color.yellow.opacity(0.2)).cornerRadius(6)
