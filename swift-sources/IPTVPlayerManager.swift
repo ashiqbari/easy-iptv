@@ -121,6 +121,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             if oldValue != selectedSection {
                 stop()
                 selectedCategory = "All"
+                categorySearchText = ""
                 reindexCategoriesAndChannels()
                 if selectedSection == .series {
                     if let firstSeries = filteredChannels.first {
@@ -146,6 +147,16 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             if oldValue != searchText {
                 updateFilteredChannelsOnly()
             }
+        }
+    }
+
+    @Published var categorySearchText = ""
+
+    var filteredCategories: [String] {
+        let query = categorySearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return categories.filter {
+            $0 != "All" && $0 != "Favorites" && $0 != "★ Favorites"
+                && (query.isEmpty || $0.localizedStandardContains(query))
         }
     }
     

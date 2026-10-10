@@ -11,6 +11,86 @@ final class SearchTests: XCTestCase {
         XCTAssertEqual(ChannelListView.categoryShortcuts, ["All", "Favorites"])
     }
 
+    func testCategorySearchIsIndependentOfChannelSearchSelectionAndPlayback() async throws {
+        let suite = "category-search-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let items = [
+            M3UItem(name: "Match", groupTitle: "Café Sports", streamURL: URL(fileURLWithPath: "/private/tmp/category-match.mp4"), contentType: .movie),
+            M3UItem(name: "Bulletin", groupTitle: "World News", streamURL: URL(fileURLWithPath: "/private/tmp/category-news.mp4"), contentType: .movie),
+            M3UItem(name: "Live", groupTitle: "Live Sports", streamURL: URL(fileURLWithPath: "/private/tmp/category-live.ts"), contentType: .live),
+            M3UItem(name: "Series", groupTitle: "Drama Series", streamURL: URL(fileURLWithPath: "/private/tmp/category-series.mp4"), contentType: .series)
+        ]
+        var loader = LibraryLoader()
+        loader.playlist = { _ in items }
+        loader.seriesDetails = { _ in SeriesDetails(details: nil, episodes: []) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
+        manager.selectedSection = .movie
+        await manager.loadPlaylist(from: "https://fixture.invalid/category-search.m3u")
+        manager.playDirectStream(items[0]); manager.player?.replaceCurrentItem(with: nil)
+        manager.selectedCategory = "Café Sports"
+        manager.searchText = "Match"
+        let player = try XCTUnwrap(manager.player)
+        let filtered = manager.filteredChannels.map(\.id)
+        #if os(macOS)
+        let hosting = NSHostingView(rootView: ContentView(manager: manager))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = hosting
+        defer { window.close() }
+        #endif
+        for (query, expected) in [(" NeWs ", ["World News"]), ("cafe", ["Café Sports"]), ("missing", []), ("", ["Café Sports", "World News"])] {
+            manager.categorySearchText = query
+            XCTAssertEqual(manager.filteredCategories, expected)
+            #if os(macOS)
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 30_000_000)
+            #endif
+            XCTAssertEqual(manager.searchText, "Match")
+            XCTAssertEqual(manager.selectedCategory, "Café Sports", "Hiding the selected category must not change the channel selection")
+            XCTAssertEqual(manager.filteredChannels.map(\.id), filtered)
+            XCTAssertTrue(manager.player === player)
+            XCTAssertEqual(manager.currentChannel?.id, items[0].id)
+        }
+        manager.categorySearchText = "news"
+        #if os(macOS)
+        manager.toggleCategoriesSidebar(); manager.toggleCategoriesSidebar()
+        XCTAssertEqual(manager.categorySearchText, "news")
+        #endif
+        manager.selectedSection = .live
+        XCTAssertEqual(manager.categorySearchText, "")
+        XCTAssertEqual(manager.filteredCategories, ["Live Sports"])
+        manager.categorySearchText = "news"
+        manager.selectedSection = .series
+        XCTAssertEqual(manager.categorySearchText, "")
+        XCTAssertEqual(manager.filteredCategories, ["Drama Series"])
+        await manager.libraryPersistence.waitForIdle()
+    }
+
+    func testClearingCategorySearchRestoresLargeCategorySetWithoutChangingChannels() async throws {
+        let suite = "category-search-large-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let items = (0..<1_000).map {
+            M3UItem(name: "Movie \($0)", groupTitle: String(format: "Category %04d", $0),
+                    streamURL: URL(fileURLWithPath: "/private/tmp/category-search-\($0).mp4"), contentType: .movie)
+        }
+        var loader = LibraryLoader(); loader.playlist = { _ in items }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
+        manager.selectedSection = .movie
+        await manager.loadPlaylist(from: "https://fixture.invalid/category-search-large.m3u")
+        for _ in 0..<5 {
+            manager.categorySearchText = "Category 0999"
+            XCTAssertEqual(manager.filteredCategories, ["Category 0999"])
+            manager.categorySearchText = " "
+            XCTAssertEqual(manager.filteredCategories.count, 1_000)
+            XCTAssertEqual(manager.filteredChannels.count, 1_000)
+            XCTAssertEqual(manager.selectedCategory, "All")
+        }
+        await manager.libraryPersistence.waitForIdle()
+    }
+
     func testReturningToAllRestoresLargeLibraryWithoutReplacingPlayer() async throws {
         let suite = "category-tests-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!

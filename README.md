@@ -34,6 +34,10 @@ Connect **Xtream Codes** accounts or **M3U/M3U Plus** playlists. Available artwo
 metadata, guide listings, and subtitle tracks depend on your source.
 EasyIPTV is a player; bring your own content source.
 
+Use **Search categories** in the library sidebar to narrow category names in
+Live TV, Movies, or TV Shows. It is independent of channel search; All and
+Favorites stay available, and filtering categories does not change playback.
+
 ## Start watching
 
 1. Download the DMG from [GitHub Releases](https://github.com/ashiqbari/easy-iptv/releases/latest) and drag EasyIPTV into Applications.

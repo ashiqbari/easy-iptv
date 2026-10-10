@@ -215,6 +215,30 @@ public struct ContentView: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
             .padding(.bottom, 10)
+
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
+                TextField("Search categories…", text: $manager.categorySearchText)
+                    .textFieldStyle(.plain)
+                    .font(.subheadline)
+                    .accessibilityLabel("Search categories")
+                Button {
+                    manager.categorySearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary).font(.caption)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear category search")
+                .help("Clear category search")
+                .opacity(manager.categorySearchText.isEmpty ? 0 : 1)
+                .disabled(manager.categorySearchText.isEmpty)
+                .accessibilityHidden(manager.categorySearchText.isEmpty)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
             
             Divider()
             
@@ -254,7 +278,12 @@ public struct ContentView: View {
                 }
                 
                 Section("Categories") {
-                    let customCategories = manager.categories.filter { $0 != "All" && $0 != "Favorites" && $0 != "★ Favorites" }
+                    let customCategories = manager.filteredCategories
+                    if customCategories.isEmpty, !manager.categorySearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("No matching categories")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     ForEach(customCategories, id: \.self) { category in
                         categoryRow(category) {
                             Label {
@@ -277,6 +306,10 @@ public struct ContentView: View {
                 }
             }
             .listStyle(.sidebar)
+            .transaction {
+                $0.animation = nil
+                $0.disablesAnimations = true
+            }
         }
         .navigationTitle("IPTV Library")
         .toolbar {
