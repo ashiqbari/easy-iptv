@@ -29,16 +29,17 @@ public struct ChannelListView: View {
                     .textFieldStyle(.plain)
                     .font(.subheadline)
                 
-                if !manager.searchText.isEmpty {
-                    Button {
-                        manager.searchText = ""
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
+                Button(action: clearSearch) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear Search")
+                .help("Clear Search")
+                .opacity(manager.searchText.isEmpty ? 0 : 1)
+                .disabled(manager.searchText.isEmpty)
+                .accessibilityHidden(manager.searchText.isEmpty)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -90,6 +91,15 @@ public struct ChannelListView: View {
     }
     
     // MARK: - Subviews
+
+    func clearSearch() {
+        // Clearing can restore thousands of rows; don't animate the bulk insertion.
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            manager.searchText = ""
+        }
+    }
     
     /// Horizontal category scroll view
     private var categoryFilterBar: some View {
@@ -179,9 +189,7 @@ public struct ChannelListView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
                 
-                Button("Clear Search") {
-                    manager.searchText = ""
-                }
+                Button("Clear Search", action: clearSearch)
                 .buttonStyle(.borderedProminent)
             } else if manager.selectedCategory == "★ Favorites" {
                 Text("You haven't added any favorite channels yet. Tap the star icon on any channel to add it here.")
