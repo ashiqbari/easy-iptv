@@ -30,6 +30,7 @@ Bring your Xtream Codes account or M3U playlist, and make yourself at home.
 | ⏯ **Pick up where you left off** | Saved movie and episode progress, Resume or Start over, and watched indicators. |
 | 🖥 **Native playback** | AVKit playback, an in-app VLC fallback on macOS, volume controls, and native macOS fullscreen. |
 | ◐ **Appearance** | Choose System, Light, or Dark from the sidebar's Appearance menu (or the macOS menu bar). Your choice is remembered and changes without restarting playback. |
+| ⬇ **Offline viewing** | Download movies, individual episodes, or a season. Manage the queue from Downloads and play saved media with the same subtitles and resume progress. |
 
 Connect **Xtream Codes** accounts or **M3U/M3U Plus** playlists. Available artwork,
 metadata, guide listings, and subtitle tracks depend on your source.
@@ -49,6 +50,39 @@ The macOS app requires **macOS 15 or later**. To build from source, use
 **Xcode 16 or later with Swift 6 and Swift Package Manager**.
 
 ## The little things that matter
+
+<details>
+<summary><strong>Downloads and offline viewing</strong></summary>
+
+Choose **Download** beside Play on a movie's details page, or on an episode card.
+**Download season** asks for confirmation before queuing the selected season.
+Open **Downloads** from Quick Access or the macOS menu (Command–Shift–D) to see
+movies and shows grouped by series and season. Two transfers run at a time.
+Pause, resume, cancel, retry, or delete individual items; deleting files or the
+whole library asks for confirmation and keeps viewing progress.
+
+Direct-file transfers use URLSession and save bytes to disk, not an in-memory
+video buffer. Partial transfers resume when the provider and URLSession support
+it; otherwise Resume restarts the transfer. HLS uses Apple's native offline asset
+downloader, not a saved `.m3u8` playlist. Background sessions reconnect when the
+app opens again. DASH and DRM-protected sources aren't supported for downloads.
+
+Completed downloads are used automatically by the existing player. Downloaded
+episodes support next/previous episode, subtitles, saved progress, resume, and
+pause-on-exit. Available provider sidecar subtitles and poster artwork are saved
+alongside the media; a subtitle failure shows a warning without discarding the
+video. Embedded HLS tracks depend on the media selections downloaded by Apple.
+When offline, use Downloads for saved content; unavailable items show an offline
+message instead of starting another stream.
+
+On macOS, direct media, sidecars, artwork, and the download manifest live in
+`~/Library/Application Support/EasyIPTV/Downloads/`. HLS packages stay at Apple's
+system-managed location and may be purged by the OS; missing files can be downloaded
+again. Downloads consume disk space and may be several GB per item. The manifest
+contains provider URLs, so it is private app data; don't share it. Wi-Fi-only and
+whole-library download settings aren't included.
+
+</details>
 
 <details>
 <summary><strong>Resume, progress, and leaving the player</strong></summary>

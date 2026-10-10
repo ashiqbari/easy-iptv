@@ -73,6 +73,11 @@ private final class DisplaySleepManager: @unchecked Sendable {
 public final class IPTVPlayerManager: NSObject, ObservableObject {
     let subtitles = SubtitleController()
     let progressStore: PlaybackProgressStore
+    let downloads: DownloadManager
+    @Published var showingDownloads = false
+    var pendingDownload: DownloadRecord?
+    var downloadSeriesItem: M3UItem? { seriesOverviewItem }
+    var seriesMetadata: MediaDetails? { seriesDetails }
     @Published var showingResumeChoice = false
     @Published var resumeRequest: PlaybackResumeRequest? {
         didSet { showingResumeChoice = resumeRequest != nil }
@@ -386,6 +391,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     // MARK: - Initialization
     
     public override init() {
+        downloads = DownloadManager.shared
         progressStore = PlaybackProgressStore()
         storageDefaults = .standard
         libraryLoader = LibraryLoader()
@@ -397,7 +403,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     /// Isolated storage and no automatic playlist playback for lifecycle tests.
-    init(progressDefaults: UserDefaults, libraryLoader: LibraryLoader = LibraryLoader(), cacheURL: URL? = nil) {
+    init(progressDefaults: UserDefaults, libraryLoader: LibraryLoader = LibraryLoader(), cacheURL: URL? = nil, downloads: DownloadManager? = nil) {
+        self.downloads = downloads ?? DownloadManager(root: FileManager.default.temporaryDirectory.appendingPathComponent("EasyIPTVDownloadsTests-\(UUID())"),
+            configuration: .ephemeral, monitorNetwork: false, subtitleFetch: { $0.subtitleSources ?? [] })
         progressStore = PlaybackProgressStore(defaults: progressDefaults)
         storageDefaults = progressDefaults
         self.libraryLoader = libraryLoader
@@ -409,6 +417,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     private func observeProgress() {
         progressStore.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        downloads.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        downloads.$deleting.sink { [weak self] ids in
+            guard let self, let item = self.currentChannel, ids.contains(PlaybackProgressStore.key(for: item)),
+                  self.downloads.localURL(for: item) != nil else { return }
+            self.stop()
+        }.store(in: &cancellables)
     }
     
     deinit {
@@ -760,12 +774,18 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         }
         #endif
         
-        let asset = AVURLAsset(url: item.streamURL, options: [
+        let localURL = downloads.localURL(for: item)
+        if localURL == nil, !downloads.isOnline {
+            isBuffering = false; isPlaying = false
+            errorMessage = "You're offline and this item hasn't been downloaded. Open Downloads to watch saved movies and episodes."
+            return
+        }
+        let asset = AVURLAsset(url: localURL ?? item.streamURL, options: [
             AVURLAssetPreferPreciseDurationAndTimingKey: false
         ])
         let playerItem = AVPlayerItem(asset: asset)
         if item.isVOD {
-            subtitles.configure(item: playerItem, provider: subtitleProvider(for: item))
+            subtitles.configure(item: playerItem, provider: subtitleProvider(for: item), offlineSources: localURL == nil ? nil : (downloads.record(for: item)?.subtitles ?? []))
         }
         
         if item.isVOD {
@@ -803,10 +823,16 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         playerTimeControlObserver?.invalidate()
         let vlc = VLCMediaPlayer()
         vlc.delegate = self
-        vlc.media = VLCMedia(url: item.streamURL)
+        let localURL = downloads.localURL(for: item)
+        if localURL == nil, !downloads.isOnline {
+            errorMessage = "You're offline. Open Downloads to watch saved movies and episodes."
+            isBuffering = false; isPlaying = false
+            return
+        }
+        vlc.media = VLCMedia(url: localURL ?? item.streamURL)
         vlcPlayer = vlc
         if item.isVOD {
-            subtitles.configure(player: vlc, provider: subtitleProvider(for: item))
+            subtitles.configure(player: vlc, provider: subtitleProvider(for: item), offlineSources: localURL == nil ? nil : (downloads.record(for: item)?.subtitles ?? []))
         }
         vlc.audio?.volume = pendingResumePosition == nil ? Int32((playbackVolume * 100).rounded()) : 0
         useVLCPlayback = true
@@ -859,6 +885,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         self.seriesEpisodes = []
         seriesDetails = nil
         seriesDetailsFailed = false
+        if !downloads.isOnline {
+            let episodes = downloads.records.filter { $0.series.map { PlaybackProgressStore.key(for: $0) == PlaybackProgressStore.key(for: item) } == true && $0.status == .downloaded }
+            seriesEpisodes = episodes.map(\.item).sorted { ($0.seasonNumber ?? 0, $0.episodeNumber ?? 0) < ($1.seasonNumber ?? 0, $1.episodeNumber ?? 0) }
+            seriesDetails = episodes.first?.details
+            isLoadingEpisodes = false
+            return
+        }
         let loadDetails = libraryLoader.seriesDetails
         seriesLoadTask = Task { [weak self] in
             do {
@@ -1146,6 +1179,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Skips to the next channel in the current filtered list.
     public func nextChannel() {
+        if currentChannel?.contentType == .series, !isViewingSeriesDetails, !seriesEpisodes.isEmpty {
+            let index = seriesEpisodes.firstIndex { $0.subtitleCacheKey == currentChannel?.subtitleCacheKey } ?? -1
+            let candidates = seriesEpisodes.dropFirst(index + 1)
+            if let next = candidates.first(where: { downloads.isOnline || downloads.localURL(for: $0) != nil }) { playDirectStream(next) }
+            return
+        }
         let list = filteredChannels
         guard !list.isEmpty, let current = currentChannel,
               let currentIndex = list.firstIndex(where: { $0.id == current.id }) else {
@@ -1159,6 +1198,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Skips to the previous channel in the current filtered list.
     public func previousChannel() {
+        if currentChannel?.contentType == .series, !isViewingSeriesDetails, !seriesEpisodes.isEmpty {
+            let index = seriesEpisodes.firstIndex { $0.subtitleCacheKey == currentChannel?.subtitleCacheKey } ?? 0
+            if let previous = seriesEpisodes.prefix(index).last(where: { downloads.isOnline || downloads.localURL(for: $0) != nil }) { playDirectStream(previous) }
+            return
+        }
         let list = filteredChannels
         guard !list.isEmpty, let current = currentChannel,
               let currentIndex = list.firstIndex(where: { $0.id == current.id }) else {
@@ -1201,10 +1245,25 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func subtitleProvider(for item: M3UItem) -> () async throws -> [SubtitleSource] {
+        if downloads.localURL(for: item) != nil {
+            let sources = downloads.record(for: item)?.subtitles ?? []
+            return { sources }
+        }
         let service = xtreamManager
         return {
             try await service.fetchSubtitleSources(for: item)
         }
+    }
+
+    func playDownload(_ record: DownloadRecord) {
+        stop()
+        if let series = record.series {
+            seriesOverviewItem = series
+            seriesDetails = record.details
+            seriesEpisodes = downloads.records.filter { $0.seriesKey == record.seriesKey && $0.status == .downloaded }
+                .map(\.item).sorted { ($0.seasonNumber ?? 0, $0.episodeNumber ?? 0) < ($1.seasonNumber ?? 0, $1.episodeNumber ?? 0) }
+        }
+        playDirectStream(record.item)
     }
     
     // MARK: - Favorites Management

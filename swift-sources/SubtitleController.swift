@@ -41,6 +41,7 @@ final class SubtitleController: NSObject, ObservableObject {
     private var selection = UUID()
     private var nativeTracksLoaded = false
     private var providerSources: [SubtitleSource]?
+    private var usingOfflineSources = false
     private var failedTrackID: String?
     private var nativeDiscovery: Task<Void, Never>?
     private var providerDiscovery: Task<Void, Never>?
@@ -119,9 +120,16 @@ final class SubtitleController: NSObject, ObservableObject {
         provider = nil
     }
 
-    func configure(item: AVPlayerItem, provider: @escaping () async throws -> [SubtitleSource]) {
-        avItem = item
+    private func prepareProvider(_ provider: @escaping () async throws -> [SubtitleSource], offlineSources: [SubtitleSource]?) {
+        if usingOfflineSources != (offlineSources != nil) { providerSources = nil }
+        usingOfflineSources = offlineSources != nil
+        if let offlineSources { providerSources = offlineSources }
         self.provider = provider
+    }
+
+    func configure(item: AVPlayerItem, provider: @escaping () async throws -> [SubtitleSource], offlineSources: [SubtitleSource]? = nil) {
+        avItem = item
+        prepareProvider(provider, offlineSources: offlineSources)
         let output = AVPlayerItemLegibleOutput()
         output.suppressesPlayerRendering = true
         output.setDelegate(self, queue: .main)
@@ -131,9 +139,9 @@ final class SubtitleController: NSObject, ObservableObject {
     }
 
     #if os(macOS)
-    func configure(player: VLCMediaPlayer, provider: @escaping () async throws -> [SubtitleSource]) {
+    func configure(player: VLCMediaPlayer, provider: @escaping () async throws -> [SubtitleSource], offlineSources: [SubtitleSource]? = nil) {
         vlcPlayer = player
-        self.provider = provider
+        prepareProvider(provider, offlineSources: offlineSources)
         loadTracksIfNeeded()
     }
 

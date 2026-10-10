@@ -40,7 +40,7 @@ final class PlaybackProgressStore: ObservableObject {
             .flatMap { try? JSONDecoder().decode([String: PlaybackProgress].self, from: $0) } ?? [:]
     }
 
-    static func key(for item: M3UItem) -> String {
+    nonisolated static func key(for item: M3UItem) -> String {
         SHA256.hash(data: Data(item.subtitleCacheKey.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 

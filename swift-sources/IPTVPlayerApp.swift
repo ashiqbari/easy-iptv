@@ -8,6 +8,14 @@
 import SwiftUI
 import AVFoundation
 
+#if os(iOS)
+final class DownloadAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        DownloadManager.shared.handleBackgroundEvents(identifier, completion: completionHandler)
+    }
+}
+#endif
+
 enum AppearancePreference: String, CaseIterable {
     static let storageKey = "appearance"
     case system, light, dark
@@ -67,6 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct IPTVPlayerApp: App {
     #if os(macOS)
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    #else
+    @UIApplicationDelegateAdaptor(DownloadAppDelegate.self) var appDelegate
     #endif
     
     // MARK: - State Management
@@ -93,6 +103,10 @@ struct IPTVPlayerApp: App {
         .commands {
             CommandMenu("Appearance") {
                 AppearancePicker()
+            }
+            CommandMenu("Downloads") {
+                Button("Show Downloads") { manager.showingDownloads = true }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
             }
             // Media Playback menu in macOS top bar
             CommandMenu("Playback") {

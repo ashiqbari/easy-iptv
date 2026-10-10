@@ -5,7 +5,7 @@ struct SeriesDetails: Sendable {
     let episodes: [M3UItem]
 }
 
-struct MediaDetails: Sendable {
+struct MediaDetails: Codable, Sendable {
     var title: String?
     var poster: URL?
     var backdrop: URL?
@@ -108,7 +108,7 @@ struct MovieDetailsView: View {
             VStack(alignment: .leading, spacing: 20) {
                 Button { manager.stop() } label: { Label("Back to Movies", systemImage: "chevron.left") }
                     .buttonStyle(.plain)
-                if let backdrop = details?.backdrop {
+                if let backdrop = details?.backdrop, manager.downloads.isOnline {
                     AsyncImage(url: backdrop) { image in
                         image.resizable().scaledToFill()
                     } placeholder: { Color.primary.opacity(0.08) }
@@ -125,7 +125,8 @@ struct MovieDetailsView: View {
                 if loading { ProgressView("Loading movie details…") }
                 if failed {
                     HStack {
-                        Text("Movie details couldn't be loaded. You can still play this movie.")
+                        Text(manager.downloads.isOnline ? "Movie details couldn't be loaded. You can still play this movie."
+                             : "You're offline and this movie hasn't been downloaded. Open Downloads to watch saved media.")
                             .font(.caption).foregroundStyle(.secondary)
                         Button("Retry") { retry += 1 }
                     }
@@ -148,10 +149,17 @@ struct MovieDetailsView: View {
             details = nil
             loading = true
             failed = false
+            if manager.downloads.localURL(for: item) != nil {
+                details = manager.downloads.record(for: item)?.details
+                loading = false
+                return
+            }
+            if !manager.downloads.isOnline { loading = false; failed = true; return }
             do {
                 let result = try await XtreamCodesManager().fetchMovieDetails(for: item)
                 try Task.checkCancellation()
                 details = result
+                manager.downloads.updateDetails(for: item, details: result)
             } catch {
                 guard !Task.isCancelled else { return }
                 failed = true
@@ -161,7 +169,14 @@ struct MovieDetailsView: View {
     }
 
     private var poster: some View {
-        HeroArtworkView(url: details?.poster ?? item.logoURL, symbol: "film")
+        Group {
+            if let record = manager.downloads.record(for: item), let path = record.posterPath {
+                DownloadArtwork(url: manager.downloads.storage.url(path), symbol: "film")
+                    .frame(width: 150, height: 225).clipped().cornerRadius(12)
+            } else {
+                HeroArtworkView(url: details?.poster ?? item.logoURL, symbol: "film")
+            }
+        }
     }
 
     private var information: some View {
@@ -169,16 +184,25 @@ struct MovieDetailsView: View {
             Text(details?.title ?? item.name).font(.largeTitle.bold()).fixedSize(horizontal: false, vertical: true)
             MediaMetadataView(details: details)
             let position = manager.progressStore.progress(for: item)?.resumePosition
-            Button { manager.playMovie() } label: {
-                Label(position.map { "Resume from \(PlaybackProgress.timestamp($0))" } ?? "Play", systemImage: "play.fill")
-                    .font(.headline).padding(.horizontal, 16).padding(.vertical, 8)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { actions(position: position) }
+                VStack(alignment: .leading, spacing: 12) { actions(position: position) }
             }
-            .buttonStyle(.borderedProminent)
             if position != nil {
                 Button("Start over") { manager.playMovie(startOver: true) }.buttonStyle(.bordered)
             }
             MediaProgressView(store: manager.progressStore, item: item)
         }
+    }
+
+    @ViewBuilder private func actions(position: Double?) -> some View {
+        Button { manager.playMovie() } label: {
+            Label(position.map { "Resume from \(PlaybackProgress.timestamp($0))" } ?? "Play", systemImage: "play.fill")
+                .font(.headline).padding(.horizontal, 16).padding(.vertical, 8)
+        }
+        .buttonStyle(.borderedProminent)
+        DownloadControl(item: item, series: nil, details: details, downloads: manager.downloads)
+            .buttonStyle(.bordered)
     }
 
     private var recommendations: [M3UItem] {
@@ -241,12 +265,7 @@ struct HeroArtworkView: View {
     let url: URL?
     let symbol: String
     var body: some View {
-        AsyncImage(url: url) { image in
-            image.resizable().scaledToFill()
-        } placeholder: {
-            RoundedRectangle(cornerRadius: 12).fill(Color.purple.opacity(0.2))
-                .overlay(Image(systemName: symbol).font(.largeTitle).foregroundStyle(.purple))
-        }
+        DownloadArtwork(url: url, symbol: symbol)
         .frame(width: 150, height: 225).clipped().cornerRadius(12)
         .shadow(color: .black.opacity(0.6), radius: 16, x: 0, y: 8)
         .accessibilityHidden(true)

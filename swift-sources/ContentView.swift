@@ -93,6 +93,20 @@ public struct ContentView: View {
         .sheet(isPresented: $manager.showingAboutSheet) {
             aboutSheet
         }
+        .sheet(isPresented: $manager.showingDownloads, onDismiss: {
+            if let record = manager.pendingDownload {
+                manager.pendingDownload = nil
+                manager.playDownload(record)
+            }
+        }) {
+            DownloadsView(manager: manager, downloads: manager.downloads)
+        }
+        .alert("Download issue", isPresented: Binding(
+            get: { manager.downloads.errorMessage != nil },
+            set: { if !$0 { manager.downloads.errorMessage = nil } }
+        )) {
+            Button("OK") { manager.downloads.errorMessage = nil }
+        } message: { Text(manager.downloads.errorMessage ?? "") }
         .alert("Continue watching?", isPresented: $manager.showingResumeChoice, presenting: manager.resumeRequest) { request in
             Button("Resume from \(PlaybackProgress.timestamp(request.position))") {
                 manager.resolveResume(request, startOver: false)
@@ -255,6 +269,12 @@ public struct ContentView: View {
             
             List(selection: $manager.selectedCategory) {
                 Section("Quick Access") {
+                    Button { manager.showingDownloads = true } label: {
+                        Label("Downloads", systemImage: "arrow.down.circle")
+                    }
+                    if !manager.downloads.isOnline {
+                        Text("Offline — open Downloads to watch saved media.").font(.caption).foregroundStyle(.secondary)
+                    }
                     categoryRow("All") {
                         Label {
                             HStack {

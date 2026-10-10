@@ -8,6 +8,7 @@
 import SwiftUI
 import AVFoundation
 import QuartzCore
+
 #if os(macOS)
 import VLC
 #endif
@@ -229,6 +230,9 @@ public struct IPTVPlaybackView: View {
                             .foregroundColor(.white)
                             .lineLimit(1)
                         
+                        if manager.downloads.localURL(for: channel) != nil {
+                            Label("Downloaded", systemImage: "checkmark.circle.fill").font(.caption2.bold()).foregroundStyle(.white)
+                        } else if channel.contentType == .live {
                         // Live Badge
                         HStack(spacing: 4) {
                             Circle()
@@ -242,6 +246,7 @@ public struct IPTVPlaybackView: View {
                         .padding(.vertical, 2)
                         .background(Color.red.opacity(0.8))
                         .cornerRadius(4)
+                        }
                     }
                     
                     Text(channel.displayGroup)
@@ -838,6 +843,10 @@ public struct IPTVPlaybackView: View {
                             }
                             .padding(.horizontal, 32)
                             
+                            DownloadSeasonControl(manager: manager)
+                                .buttonStyle(.bordered)
+                                .padding(.horizontal, 32)
+
                             // Dynamic Interactive Season Selector Chips
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 10) {
@@ -879,38 +888,42 @@ public struct IPTVPlaybackView: View {
                                 // Full Multi-Column Grid View (All episodes visible at once!)
                                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 16)], spacing: 16) {
                                     ForEach(Array(manager.filteredEpisodesForSelectedSeason.enumerated()), id: \.element.id) { index, ep in
-                                        Button {
-                                            manager.playDirectStream(ep)
-                                        } label: {
-                                            VStack(alignment: .leading, spacing: 8) {
-                                                ZStack(alignment: .bottomTrailing) {
-                                                    EpisodeArtworkView(url: ep.logoURL ?? manager.currentChannel?.logoURL)
+                                        VStack(alignment: .leading, spacing: 8) {
+                                            Button {
+                                                manager.playDirectStream(ep)
+                                            } label: {
+                                                VStack(alignment: .leading, spacing: 8) {
+                                                    ZStack(alignment: .bottomTrailing) {
+                                                        EpisodeArtworkView(url: ep.logoURL ?? manager.currentChannel?.logoURL)
 
-                                                    Text("\(index + 1)")
-                                                        .font(.caption.bold())
-                                                        .foregroundColor(.white)
-                                                        .padding(.horizontal, 8)
-                                                        .padding(.vertical, 3)
-                                                        .background(Color.black.opacity(0.85))
-                                                        .cornerRadius(4)
-                                                        .padding(8)
+                                                        Text("\(index + 1)")
+                                                            .font(.caption.bold())
+                                                            .foregroundColor(.white)
+                                                            .padding(.horizontal, 8)
+                                                            .padding(.vertical, 3)
+                                                            .background(Color.black.opacity(0.85))
+                                                            .cornerRadius(4)
+                                                            .padding(8)
+                                                    }
+
+                                                    Text(ep.name)
+                                                        .font(.caption.weight(.semibold))
+                                                        .foregroundColor(.primary)
+                                                        .lineLimit(1)
+
+                                                    Text(ep.groupTitle)
+                                                        .font(.caption2)
+                                                        .foregroundColor(.secondary)
+                                                    MediaProgressView(store: manager.progressStore, item: ep)
                                                 }
-
-                                                Text(ep.name)
-                                                    .font(.caption.weight(.semibold))
-                                                    .foregroundColor(.primary)
-                                                    .lineLimit(1)
-                                                
-                                                Text(ep.groupTitle)
-                                                    .font(.caption2)
-                                                    .foregroundColor(.secondary)
-                                                MediaProgressView(store: manager.progressStore, item: ep)
+                                                .padding(8)
+                                                .background(Color.primary.opacity(0.05))
+                                                .cornerRadius(10)
                                             }
-                                            .padding(8)
-                                            .background(Color.primary.opacity(0.05))
-                                            .cornerRadius(10)
+                                            .buttonStyle(.plain)
+                                            DownloadControl(item: ep, series: manager.downloadSeriesItem, details: manager.seriesMetadata, downloads: manager.downloads)
+                                                .buttonStyle(.bordered)
                                         }
-                                        .buttonStyle(.plain)
                                     }
                                 }
                                 .padding(.horizontal, 32)
@@ -921,39 +934,43 @@ public struct IPTVPlaybackView: View {
                                     ScrollView(.horizontal, showsIndicators: true) {
                                         LazyHStack(spacing: 16) {
                                             ForEach(Array(manager.filteredEpisodesForSelectedSeason.enumerated()), id: \.element.id) { index, ep in
-                                                Button {
-                                                    manager.playDirectStream(ep)
-                                                } label: {
-                                                    VStack(alignment: .leading, spacing: 8) {
-                                                        ZStack(alignment: .bottomTrailing) {
-                                                            EpisodeArtworkView(url: ep.logoURL ?? manager.currentChannel?.logoURL)
-                                                                .frame(width: 220, height: 124)
+                                                VStack(alignment: .leading, spacing: 8) {
+                                                    Button {
+                                                        manager.playDirectStream(ep)
+                                                    } label: {
+                                                        VStack(alignment: .leading, spacing: 8) {
+                                                            ZStack(alignment: .bottomTrailing) {
+                                                                EpisodeArtworkView(url: ep.logoURL ?? manager.currentChannel?.logoURL)
+                                                                    .frame(width: 220, height: 124)
+
+                                                                Text("\(index + 1)")
+                                                                    .font(.caption.bold())
+                                                                    .foregroundColor(.white)
+                                                                    .padding(.horizontal, 8)
+                                                                    .padding(.vertical, 3)
+                                                                    .background(Color.black.opacity(0.85))
+                                                                    .cornerRadius(4)
+                                                                    .padding(8)
+                                                            }
+
+                                                            Text(ep.name)
+                                                                .font(.caption.weight(.semibold))
+                                                                .foregroundColor(.primary)
+                                                                .lineLimit(1)
+                                                                .frame(width: 220, alignment: .leading)
                                                             
-                                                            Text("\(index + 1)")
-                                                                .font(.caption.bold())
-                                                                .foregroundColor(.white)
-                                                                .padding(.horizontal, 8)
-                                                                .padding(.vertical, 3)
-                                                                .background(Color.black.opacity(0.85))
-                                                                .cornerRadius(4)
-                                                                .padding(8)
+                                                            Text(ep.groupTitle)
+                                                                .font(.caption2)
+                                                                .foregroundColor(.secondary)
+                                                            MediaProgressView(store: manager.progressStore, item: ep)
+                                                                .frame(width: 220, alignment: .leading)
                                                         }
-                                                        
-                                                        Text(ep.name)
-                                                            .font(.caption.weight(.semibold))
-                                                            .foregroundColor(.primary)
-                                                            .lineLimit(1)
-                                                            .frame(width: 220, alignment: .leading)
-                                                        
-                                                        Text(ep.groupTitle)
-                                                            .font(.caption2)
-                                                            .foregroundColor(.secondary)
-                                                        MediaProgressView(store: manager.progressStore, item: ep)
-                                                            .frame(width: 220, alignment: .leading)
                                                     }
+                                                    .buttonStyle(.plain)
+                                                    .id(index)
+                                                    DownloadControl(item: ep, series: manager.downloadSeriesItem, details: manager.seriesMetadata, downloads: manager.downloads)
+                                                        .buttonStyle(.bordered)
                                                 }
-                                                .buttonStyle(.plain)
-                                                .id(index)
                                             }
                                         }
                                         .padding(.horizontal, 32)
@@ -979,6 +996,10 @@ public struct IPTVPlaybackView: View {
     /// Placeholder state when no channel is selected.
     private var emptyPlaceholderView: some View {
         VStack(spacing: 16) {
+            if let error = manager.errorMessage {
+                Text(error).foregroundStyle(.white).multilineTextAlignment(.center)
+                Button("Open Downloads") { manager.showingDownloads = true }.buttonStyle(.borderedProminent)
+            }
             Image(systemName: "play.tv")
                 .font(.system(size: 54))
                 .foregroundColor(.gray)

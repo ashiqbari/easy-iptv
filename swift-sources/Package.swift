@@ -34,6 +34,8 @@ let package = Package(
                 "XtreamCodesManager.swift",
                 "IPTVPlayerManager.swift",
                 "PlaybackProgress.swift",
+                "Downloads.swift",
+                "DownloadsView.swift",
                 "LibraryLifecycle.swift",
                 "VLCPlaybackRetirement.swift",
                 "IPTVPlaybackView.swift",

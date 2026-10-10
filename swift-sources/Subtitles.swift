@@ -178,7 +178,7 @@ actor SubtitleFileCache {
         requests.removeAll()
     }
 
-    private static func download(_ url: URL) async throws -> Data {
+    static func download(_ url: URL) async throws -> Data {
         if url.isFileURL {
             return try await Task.detached {
                 let scoped = url.startAccessingSecurityScopedResource()
