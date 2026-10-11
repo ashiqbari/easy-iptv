@@ -118,8 +118,8 @@ not repeat the download. Text-size preferences are remembered across sessions.
 <details>
 <summary><strong>TV guide tools</strong></summary>
 
-Load real provider listings, search the guide, export or import guide JSON, or
-export listings for a category. Guide availability depends on your provider.
+View real provider listings for the current channel or search across live TV.
+Guide availability depends on your provider.
 
 In Live TV, choose **Search TV Guide** in the toolbar (Command–Shift–G on macOS).
 Search a team, match, or programme across **On now** or **Later today** listings,
@@ -129,10 +129,17 @@ channels per page and reflect the provider's schedule, not verified broadcast co
 The first search window starts a background XMLTV import. Current and upcoming
 programmes for the rest of the local day are indexed on disk in a SQLite cache;
 the whole guide is not retained in app memory. Reopening the window uses cached
-listings, with refreshes after three hours or at the next local day. A failed
-refresh preserves the previous guide. Channels need a guide URL and a matching
+listings, with refreshes three hours after the actual download or at the next
+local day. Failed or unusable imports preserve the previous guide and retry
+after one minute while the guide is open. Channels need a guide URL and a matching
 XMLTV channel ID (`tvg-id` / provider EPG ID); channels without these are reported
 as unavailable rather than guessed by name.
+
+The player's **TV Guide** reads the same XMLTV cache as search. If XMLTV has no
+usable listings, Xtream channels can use the provider's single-channel schedule.
+Both guide windows offer **Refresh guides** to download new XMLTV listings, and
+show download times and refresh failures. **Refresh Library** reloads the active
+source's channels, movies, and shows; it is separate from a guide refresh.
 
 Imports stream directly into database transactions, and searches are debounced
 and paginated. The cache has a 256 MiB database budget (temporary journal files

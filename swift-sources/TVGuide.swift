@@ -18,17 +18,33 @@ struct GuideProgram: Identifiable, Sendable {
 }
 
 enum GuideError: LocalizedError {
-    case invalidFeed, tooLarge, download
+    case invalidFeed, tooLarge, download, missingSource, missingChannelID, noMatchingChannel, noUpcomingPrograms, invalidListings
     var errorDescription: String? {
         switch self {
         case .invalidFeed: return "The provider returned an invalid TV guide."
         case .tooLarge: return "The provider's single-channel guide response is unexpectedly large."
         case .download: return "Could not download the TV guide. Please try again."
+        case .missingSource: return "This channel has no supported TV guide URL. Refresh your playlist or check its guide configuration."
+        case .missingChannelID: return "This channel has no XMLTV channel ID. Its provider did not return a usable channel schedule."
+        case .noMatchingChannel: return "The XMLTV guide has no programmes matching the channel IDs in your playlist."
+        case .noUpcomingPrograms: return "The provider has no usable current or upcoming programmes for the rest of today."
+        case .invalidListings: return "The provider returned listings, but their titles or programme times could not be read."
         }
     }
 }
 
+struct ChannelGuideResult: Sendable {
+    let programs: [GuideProgram]
+    let updatedAt: Date?
+    let nextRefresh: Date
+    let message: String?
+}
+
 actor TVGuide {
+    typealias Download = @Sendable (URL) async throws -> URL
+    private let download: Download
+
+    init(download: @escaping Download = { try await TVGuide.downloadRequest($0) }) { self.download = download }
     static func feedURL(for item: M3UItem) -> URL? {
         if let url = item.guideURL {
             return ["http", "https"].contains(url.scheme?.lowercased() ?? "") ? url : nil
@@ -63,10 +79,81 @@ actor TVGuide {
     }
 
     func load(for item: M3UItem) async throws -> [GuideProgram] {
-        let channelURL = Self.channelRequest(for: item)
-        guard let url = channelURL ?? Self.feedURL(for: item),
-              channelURL != nil || !(item.tvgID ?? "").isEmpty else { return [] }
+        var channelError: Error?
+        if let url = Self.channelRequest(for: item) {
+            do {
+                let programs = try await loadChannel(url)
+                if !programs.isEmpty { return programs }
+            } catch {
+                try Task.checkCancellation()
+                channelError = error
+            }
+        }
+        guard let url = Self.feedURL(for: item), let id = item.tvgID, !id.isEmpty else {
+            if let channelError { throw channelError }
+            return []
+        }
+        let file = try await download(url)
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard let stream = InputStream(url: file) else { throw GuideError.invalidFeed }
+        return try Self.parse(XMLParser(stream: stream), channelID: id, now: Date())
+    }
+
+    func load(for item: M3UItem, index: GuideSearchIndex, channels: [M3UItem], force: Bool) async throws -> ChannelGuideResult {
+        var summary: GuideRefreshSummary?
+        var feedError: Error?
+        var channelError: Error?
+        if Self.feedURL(for: item) != nil, !(item.tvgID ?? "").isEmpty {
+            do {
+                summary = try await index.refresh(channels: channels, force: force)
+                let programs = try await index.programs(for: item)
+                if !programs.isEmpty {
+                    let status = try await index.downloadStatus(for: item)
+                    return ChannelGuideResult(programs: programs, updatedAt: status.updatedAt,
+                                              nextRefresh: summary?.nextRefresh ?? Date().addingTimeInterval(60),
+                                              message: status.failed ? "Refresh failed for this channel's guide. Showing cached listings." : nil)
+                }
+            } catch {
+                try Task.checkCancellation()
+                feedError = error
+            }
+        }
+        if let url = Self.channelRequest(for: item) {
+            do {
+                let programs = try await loadChannel(url)
+                if !programs.isEmpty {
+                    let nextRefresh = summary?.nextRefresh ?? Date().addingTimeInterval(feedError == nil ? 10_800 : 60)
+                    return ChannelGuideResult(programs: programs, updatedAt: Date(),
+                                              nextRefresh: min(nextRefresh, Calendar.current.dateInterval(of: .day, for: Date())?.end ?? Date()),
+                                              message: "Using the provider's channel schedule; XMLTV listings for this channel are unavailable.")
+                }
+            } catch {
+                try Task.checkCancellation()
+                channelError = error
+            }
+        }
+        if Self.feedURL(for: item) == nil { throw GuideError.missingSource }
+        if (item.tvgID ?? "").isEmpty { throw GuideError.missingChannelID }
+        if let feedError { throw feedError }
+        if let message = summary?.failureMessage {
+            let channelMessage = channelError.map { " Channel schedule: \($0.localizedDescription)" } ?? ""
+            throw NSError(domain: "TVGuide", code: 1, userInfo: [NSLocalizedDescriptionKey: message + channelMessage])
+        }
+        if let channelError { throw channelError }
+        throw GuideError.noUpcomingPrograms
+    }
+
+    private func loadChannel(_ url: URL) async throws -> [GuideProgram] {
+        let file = try await download(url)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size <= 8 * 1024 * 1024 else { throw GuideError.tooLarge }
+        return Self.remainingToday(try Self.parseChannel(Data(contentsOf: file, options: .mappedIfSafe)), now: Date())
+    }
+
+    private static func downloadRequest(_ url: URL) async throws -> URL {
         var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 45
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForResource = 90
@@ -85,16 +172,11 @@ actor TVGuide {
             try Task.checkCancellation()
             throw GuideError.download
         }
-        defer { try? FileManager.default.removeItem(at: file) }
-        try Task.checkCancellation()
-        let now = Date()
-        if channelURL != nil {
-            let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size <= 8 * 1024 * 1024 else { throw GuideError.tooLarge }
-            return Self.remainingToday(try Self.parseChannel(Data(contentsOf: file, options: .mappedIfSafe)), now: now)
+        if Task.isCancelled {
+            try? FileManager.default.removeItem(at: file)
+            throw CancellationError()
         }
-        guard let stream = InputStream(url: file) else { throw GuideError.invalidFeed }
-        return try Self.parse(XMLParser(stream: stream), channelID: item.tvgID ?? "", now: now)
+        return file
     }
 
     static func parse(_ data: Data, channelID: String) throws -> [GuideProgram] {
@@ -119,19 +201,36 @@ actor TVGuide {
             let result = (value as? NSNumber)?.doubleValue ?? (value as? String).flatMap(Double.init)
             return result.flatMap { $0.isFinite ? $0 : nil }
         }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let server = response["server_info"] as? [String: Any]
+        // shortcut: dates without an advertised zone use UTC; add provider-specific offsets if a provider omits its zone.
+        formatter.timeZone = (server?["timezone"] as? String).flatMap(TimeZone.init(identifier:)) ?? TimeZone(secondsFromGMT: 0)
+        func date(_ values: [Any?]) -> Date? {
+            for value in values {
+                if let seconds = timestamp(value) { return Date(timeIntervalSince1970: seconds) }
+                if let text = value as? String,
+                   let date = ISO8601DateFormatter().date(from: text) ?? formatter.date(from: text) { return date }
+            }
+            return nil
+        }
         func text(_ value: Any?) -> String {
             guard let value = value as? String else { return "" }
             return (Data(base64Encoded: value).flatMap { String(data: $0, encoding: .utf8) } ?? value)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        return listings.compactMap { listing in
-            guard let start = timestamp(listing["start_timestamp"]),
-                  let end = timestamp(listing["stop_timestamp"] ?? listing["end_timestamp"]), end > start else { return nil }
+        let programs: [GuideProgram] = listings.compactMap { listing in
+            guard let start = date([listing["start_timestamp"], listing["start"]]),
+                  let end = date([listing["stop_timestamp"], listing["end_timestamp"], listing["end"], listing["stop"]]), end > start else { return nil }
             let title = text(listing["title"])
             guard !title.isEmpty else { return nil }
             return GuideProgram(title: title, description: text(listing["description"]),
-                                start: Date(timeIntervalSince1970: start), end: Date(timeIntervalSince1970: end))
+                                start: start, end: end)
         }
+        if !listings.isEmpty, programs.isEmpty { throw GuideError.invalidListings }
+        return programs
     }
 }
 
@@ -143,6 +242,7 @@ final class XMLTVPrograms: NSObject, XMLParserDelegate {
     private var sawRoot = false
     var programs: [GuideProgram] = []
     var failure: Error?
+    var matchedChannels = Set<String>()
     private let channelIDs: Set<String>?
     private let receive: ((String, GuideProgram) throws -> Void)?
     private var currentChannel = ""
@@ -191,6 +291,7 @@ final class XMLTVPrograms: NSObject, XMLParserDelegate {
         if name == "programme" {
             currentChannel = attributes["channel"] ?? ""
             selected = channelIDs?.contains(currentChannel) ?? (currentChannel == channelID)
+            if selected { matchedChannels.insert(currentChannel) }
             start = selected ? date(attributes["start"]) : nil
             end = selected ? date(attributes["stop"]) : nil
             if let now, let midnight, let start, let end {

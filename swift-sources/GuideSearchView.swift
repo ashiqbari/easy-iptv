@@ -20,9 +20,13 @@ final class GuideSearchModel: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
     private var generation = 0
-    private var refreshedAt = Date.distantPast
+    private(set) var nextRefresh = Date.distantPast
+    let refreshID = UUID()
+    private let didRefresh: (UUID) -> Void
 
-    init(index: GuideSearchIndex = GuideSearchIndex()) { self.index = index }
+    init(index: GuideSearchIndex = GuideSearchIndex(), didRefresh: @escaping (UUID) -> Void = { _ in }) {
+        self.index = index; self.didRefresh = didRefresh
+    }
     deinit { refreshTask?.cancel(); searchTask?.cancel() }
 
     func setChannels(_ items: [M3UItem]) {
@@ -61,13 +65,14 @@ final class GuideSearchModel: ObservableObject {
                 try Task.checkCancellation()
                 guard token == self.generation else { return }
                 self.summary = result
-                self.refreshedAt = Date()
+                self.nextRefresh = result.nextRefresh
                 self.indexing = false
                 self.scheduleSearch()
+                if force { self.didRefresh(self.refreshID) }
             } catch {
                 guard !Task.isCancelled, let self, token == self.generation else { return }
                 self.indexing = false; self.importError = error.localizedDescription
-                self.refreshedAt = Date()
+                self.nextRefresh = Date().addingTimeInterval(60)
                 self.scheduleSearch()
             }
         }
@@ -94,8 +99,9 @@ final class GuideSearchModel: ObservableObject {
         }
     }
 
-    func tick() {
-        if !indexing, !Calendar.current.isDate(refreshedAt, inSameDayAs: Date()) || Date().timeIntervalSince(refreshedAt) >= 10_800 {
+    func tick(now: Date = Date()) {
+        guard !indexing else { return }
+        if now >= nextRefresh {
             refresh()
         } else if !searching { scheduleSearch(offset: offset) }
     }
@@ -110,10 +116,15 @@ final class GuideSearchModel: ObservableObject {
 
 struct GuideSearchView: View {
     @ObservedObject var manager: IPTVPlayerManager
-    @StateObject private var model = GuideSearchModel()
+    @StateObject private var model: GuideSearchModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
+
+    init(manager: IPTVPlayerManager) {
+        self.manager = manager
+        _model = StateObject(wrappedValue: GuideSearchModel(index: manager.guideIndex) { manager.guideRevision = $0 })
+    }
 
     var body: some View {
         NavigationStack {
@@ -129,13 +140,18 @@ struct GuideSearchView: View {
                 if let error = model.importError {
                     Text(error).foregroundStyle(.secondary)
                 }
-                if let summary = model.summary {
+                if let summary = model.summary, !model.indexing {
+                    Text(summary.status).font(.caption).foregroundStyle(.secondary)
                     if summary.failedFeeds > 0 {
                         Text("Couldn't refresh \(summary.failedFeeds) guide(s). \(summary.failureMessage ?? "") Any previously cached listings remain searchable.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if summary.unavailableChannels > 0 {
                         Text("\(summary.unavailableChannels) channel(s) have no XMLTV guide URL or channel ID and cannot be searched.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if summary.channelsWithoutListings > 0 {
+                        Text("\(summary.channelsWithoutListings) channel(s) have no remaining listings today, or their IDs do not match the guide.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -198,6 +214,9 @@ struct GuideSearchView: View {
         .frame(minWidth: 480, idealWidth: 620, minHeight: 500, idealHeight: 650)
         #endif
         .onReceive(manager.$channels) { model.setChannels($0) }
+        .onReceive(manager.$guideRevision.dropFirst()) { revision in
+            if revision != model.refreshID { model.refresh() }
+        }
         .onReceive(timer) { _ in if scenePhase == .active { model.tick() } }
         .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in if scenePhase == .active { model.refresh() } }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in if scenePhase == .active { model.tick() } }

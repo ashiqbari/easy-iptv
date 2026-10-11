@@ -2,6 +2,53 @@ import XCTest
 @testable import EasyIPTV
 
 final class TVGuideTests: XCTestCase {
+    func testChannelDatesUseProviderTimezoneAndRejectUnreadableListings() throws {
+        let json = """
+        {"server_info":{"timezone":"Europe/Helsinki"},"epg_listings":[
+          {"title":"Local programme","start":"2026-10-10 12:30:00","end":"2026-10-10 13:30:00"},
+          {"title":"UTC programme","start":"2026-10-10T09:30:00Z","stop":"2026-10-10T10:30:00Z"}
+        ]}
+        """
+        let programs = try TVGuide.parseChannel(Data(json.utf8))
+        XCTAssertEqual(programs.count, 2)
+        XCTAssertEqual(programs[0].start, programs[1].start)
+        XCTAssertEqual(programs[0].durationMin, 60)
+        XCTAssertThrowsError(try TVGuide.parseChannel(Data("{\"epg_listings\":[{\"title\":\"Unreadable\",\"start\":\"bad\",\"end\":\"bad\"}]}".utf8)))
+    }
+
+    func testEmptyOrFailedChannelEndpointFallsBackToExactXMLTVChannel() async throws {
+        let item = M3UItem(name: "News", streamURL: URL(string: "https://provider.example/live/user/pass/1.ts")!, tvgID: "news", contentType: .live)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMddHHmmss Z"; formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        let xml = """
+        <tv><programme channel="news" start="\(formatter.string(from: Date().addingTimeInterval(-60)))" stop="\(formatter.string(from: Date().addingTimeInterval(600)))"><title>Actual news</title></programme>
+        <programme channel="other" start="\(formatter.string(from: Date().addingTimeInterval(-60)))" stop="\(formatter.string(from: Date().addingTimeInterval(600)))"><title>Wrong channel</title></programme></tv>
+        """
+        for fails in [false, true] {
+            let guide = TVGuide { url in
+                if url.lastPathComponent == "player_api.php", fails { throw GuideError.download }
+                let file = FileManager.default.temporaryDirectory.appendingPathComponent("channel-guide-\(UUID()).tmp")
+                try Data((url.lastPathComponent == "player_api.php" ? "{\"epg_listings\":[]}" : xml).utf8).write(to: file)
+                return file
+            }
+            let programs = try await guide.load(for: item)
+            XCTAssertEqual(programs.map(\.title), ["Actual news"])
+        }
+    }
+
+    func testChannelGuideReportsMissingConfiguration() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("missing-guide-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let item = M3UItem(name: "News", streamURL: URL(string: "https://cdn.example/news.ts")!, contentType: .live)
+        let index = GuideSearchIndex(url: root.appendingPathComponent("guide.sqlite"))
+        do {
+            _ = try await TVGuide().load(for: item, index: index, channels: [item], force: false)
+            XCTFail("A missing guide source must be explained")
+        } catch {
+            XCTAssertEqual(error.localizedDescription, GuideError.missingSource.localizedDescription)
+        }
+    }
+
     func testChannelRequestDoesNotFetchGlobalXMLTVOrRequireTvgID() throws {
         let item = M3UItem(name: "Channel", streamURL: URL(string: "https://provider.example/iptv/live/alice/secret/44.ts")!, contentType: .live)
         let parts = try XCTUnwrap(TVGuide.channelRequest(for: item).flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) })

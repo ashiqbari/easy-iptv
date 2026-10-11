@@ -125,7 +125,7 @@ struct DownloadHeaderControls: View {
     var body: some View {
         Group {
             Button { Task { await manager.refreshPlaylist() } } label: {
-                Label("Refresh & Sync", systemImage: "arrow.clockwise")
+                Label("Refresh Library", systemImage: "arrow.clockwise")
             }
             .help("Refresh and sync latest channels, movies, and TV shows")
             .disabled(manager.isLoading)

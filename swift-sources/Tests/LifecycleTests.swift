@@ -7,6 +7,22 @@ import AppKit
 @testable import EasyIPTV
 
 final class LifecycleTests: XCTestCase {
+    @MainActor func testRefreshAfterSwitchingToM3UUsesTheActivePlaylist() async throws {
+        let fixture = try LibraryFixture()
+        defer { fixture.remove() }
+        var loader = emptyLoader()
+        let current = item("current-playlist")
+        loader.playlist = { _ in [current] }
+        let manager = fixture.manager(loader)
+        defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
+        await manager.loadXtream(serverURL: "https://old.invalid", username: "old", password: "fake")
+        await manager.loadPlaylist(from: "https://current.invalid/list.m3u")
+        XCTAssertNil(fixture.defaults.object(forKey: "com.iptvplayer.savedXtream"))
+        await manager.refreshPlaylist()
+        XCTAssertEqual(manager.playlistURLString, "https://current.invalid/list.m3u")
+        XCTAssertEqual(manager.channels.map(\.name), [current.name])
+    }
+
     private func item(_ name: String) -> M3UItem {
         M3UItem(name: name, streamURL: URL(string: "https://fixture.invalid/\(name).mp4")!, contentType: .movie)
     }

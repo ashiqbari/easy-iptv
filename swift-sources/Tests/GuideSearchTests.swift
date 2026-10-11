@@ -98,6 +98,102 @@ final class GuideSearchTests: XCTestCase {
         requests = await downloads.requests(); XCTAssertEqual(requests, 4, "New local day must refresh even inside the TTL")
     }
 
+    func testCacheHitKeepsRealDownloadTimeAndExpiry() async throws {
+        let downloads = GuideDownloads(); await downloads.configure(xml)
+        let index = store(downloads)
+        let first = try await index.refresh(channels: [channel()], now: now, calendar: calendar)
+        let cached = try await index.refresh(channels: [channel()], now: now.addingTimeInterval(10_000), calendar: calendar)
+        XCTAssertEqual(first.downloadedFeeds, 1)
+        XCTAssertEqual(cached.downloadedFeeds, 0)
+        XCTAssertEqual(cached.lastUpdated, now)
+        XCTAssertEqual(cached.nextRefresh, now.addingTimeInterval(10_800))
+        XCTAssertEqual(cached.nextRefresh, first.nextRefresh)
+    }
+
+    func testDownloadTimestampAndFailureBelongToSelectedChannelFeed() async throws {
+        let firstDownloads = GuideDownloads(); await firstDownloads.configure(xml)
+        let secondDownloads = GuideDownloads(); await secondDownloads.configure(xml)
+        let index = GuideSearchIndex(url: root.appendingPathComponent("guide.sqlite"), download: { url in
+            if url.host == "provider.example" { return try await firstDownloads.download(url) }
+            return try await secondDownloads.download(url)
+        })
+        let firstChannel = channel()
+        let secondChannel = channel(2, provider: "second")
+        let channels = [firstChannel, secondChannel]
+        _ = try await index.refresh(channels: channels, now: now, calendar: calendar)
+        await firstDownloads.configure("<tv/>")
+        let refreshedAt = now.addingTimeInterval(60)
+        let summary = try await index.refresh(channels: channels, force: true, now: refreshedAt, calendar: calendar)
+        XCTAssertEqual(summary.lastUpdated, refreshedAt)
+        XCTAssertEqual(summary.failedFeeds, 1)
+        let first = try await index.downloadStatus(for: firstChannel)
+        let second = try await index.downloadStatus(for: secondChannel)
+        XCTAssertEqual(first.updatedAt, now)
+        XCTAssertTrue(first.failed)
+        XCTAssertEqual(second.updatedAt, refreshedAt)
+        XCTAssertFalse(second.failed)
+    }
+
+    func testEmptyAndUnmatchedFeedsKeepPreviousListingsAndRetryWithoutForcing() async throws {
+        let downloads = GuideDownloads(); await downloads.configure(xml)
+        let index = store(downloads)
+        _ = try await index.refresh(channels: [channel()], now: now, calendar: calendar)
+        var lastDownload = now
+        for (offset, payload) in ["<tv/>", xml.replacingOccurrences(of: "channel=\"one\"", with: "channel=\"wrong\"")].enumerated() {
+            let failedAt = now.addingTimeInterval(Double(offset * 100 + 10))
+            await downloads.configure(payload)
+            let failed = try await index.refresh(channels: [channel()], force: true, now: failedAt, calendar: calendar)
+            XCTAssertEqual(failed.failedFeeds, 1)
+            XCTAssertEqual(failed.lastUpdated, lastDownload)
+            XCTAssertEqual(failed.nextRefresh, failedAt.addingTimeInterval(60))
+            let retained = try await index.search("arsenal", scope: .now, now: now, calendar: calendar)
+            XCTAssertEqual(retained.hits.count, 1)
+            await downloads.configure(xml)
+            let retry = try await index.refresh(channels: [channel()], now: failedAt.addingTimeInterval(60), calendar: calendar)
+            XCTAssertEqual(retry.downloadedFeeds, 1, "A failed forced refresh must bypass a still-young old cache on retry")
+            XCTAssertEqual(retry.failedFeeds, 0)
+            lastDownload = failedAt.addingTimeInterval(60)
+        }
+    }
+
+    func testCoverageReportsValidIDsWithoutMatchingListings() async throws {
+        let downloads = GuideDownloads(); await downloads.configure(xml)
+        let summary = try await store(downloads).refresh(channels: [channel(), channel(2, tvg: "missing"), channel(3, tvg: nil)], now: now, calendar: calendar)
+        XCTAssertEqual(summary.searchableChannels, 1)
+        XCTAssertEqual(summary.channelsWithoutListings, 1)
+        XCTAssertEqual(summary.unavailableChannels, 1)
+    }
+
+    func testCancelledReaderDoesNotCancelAnotherViewsRefresh() async throws {
+        let downloads = GuideDownloads(); await downloads.configure(xml, delay: 200_000_000)
+        let index = store(downloads), items = [channel()]
+        let first = Task { try await index.refresh(channels: items, now: now, calendar: calendar) }
+        while await downloads.requests() == 0 { await Task.yield() }
+        let second = Task { try await index.refresh(channels: items, now: now, calendar: calendar) }
+        try await Task.sleep(nanoseconds: 30_000_000)
+        first.cancel()
+        let summary = try await second.value
+        XCTAssertEqual(summary.downloadedFeeds, 1)
+        do { _ = try await first.value; XCTFail("Cancelled reader must not succeed") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        let requests = await downloads.requests()
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testManualRefreshUpdatesTheSameListingsUsedByTheChannelGuide() async throws {
+        let downloads = GuideDownloads(); await downloads.configure(xml)
+        let index = store(downloads), item = channel()
+        _ = try await index.refresh(channels: [item], now: now, calendar: calendar)
+        let before = try await index.programs(for: item, now: now, calendar: calendar)
+        XCTAssertEqual(before.first?.title, "Arsenal v Chelsea")
+        await downloads.configure(xml.replacingOccurrences(of: "Arsenal", with: "Liverpool"))
+        _ = try await index.refresh(channels: [item], force: true, now: now, calendar: calendar)
+        let after = try await index.programs(for: item, now: now, calendar: calendar)
+        XCTAssertEqual(after.first?.title, "Liverpool v Chelsea")
+        let search = try await index.search("liverpool", scope: .now, now: now, calendar: calendar)
+        XCTAssertEqual(search.hits.first?.program.title, after.first?.title)
+    }
+
     func testConcurrentRefreshesShareOneDownload() async throws {
         let downloads = GuideDownloads(); await downloads.configure(xml, delay: 100_000_000)
         let index = store(downloads), items = [channel()]
@@ -105,6 +201,18 @@ final class GuideSearchTests: XCTestCase {
         async let b = index.refresh(channels: items, now: now, calendar: calendar)
         _ = try await (a, b)
         let requests = await downloads.requests(); XCTAssertEqual(requests, 1)
+    }
+
+    func testForcedRefreshDoesNotJoinAnUnforcedDownload() async throws {
+        let downloads = GuideDownloads(); await downloads.configure(xml, delay: 100_000_000)
+        let index = store(downloads), items = [channel()]
+        let initial = Task { try await index.refresh(channels: items, now: now, calendar: calendar) }
+        while await downloads.requests() == 0 { await Task.yield() }
+        let forced = try await index.refresh(channels: items, force: true, now: now, calendar: calendar)
+        _ = try await initial.value
+        XCTAssertEqual(forced.downloadedFeeds, 1)
+        let requests = await downloads.requests()
+        XCTAssertEqual(requests, 2)
     }
 
     func testSearchReadsLastCommittedIndexWhileWriterIsImporting() async throws {
@@ -259,6 +367,77 @@ final class GuideSearchTests: XCTestCase {
 
 @MainActor
 final class GuideSearchModelTests: XCTestCase {
+    func testChannelViewUsesSharedXMLTVAndRetainsListingsOnFailedRefresh() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("shared-guide-tests-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloads = GuideDownloads()
+        let formatter = DateFormatter(); formatter.dateFormat = "yyyyMMddHHmmss Z"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        let xml = """
+        <tv><programme channel="one" start="\(formatter.string(from: Date().addingTimeInterval(-60)))" stop="\(formatter.string(from: Date().addingTimeInterval(600)))"><title>Shared news</title></programme></tv>
+        """
+        await downloads.configure(xml)
+        let index = GuideSearchIndex(url: root.appendingPathComponent("guide.sqlite"), download: { try await downloads.download($0) })
+        let channel = M3UItem(name: "News", streamURL: URL(string: "https://provider.example/live/user/pass/1.ts")!, tvgID: "one", contentType: .live)
+        let guide = TVGuide { _ in XCTFail("A usable XMLTV cache must not fetch the separate channel endpoint"); throw GuideError.download }
+        let first = try await guide.load(for: channel, index: index, channels: [channel], force: false)
+        XCTAssertEqual(first.programs.first?.title, "Shared news")
+        await downloads.configure("<tv/>")
+        let retained = try await guide.load(for: channel, index: index, channels: [channel], force: true)
+        XCTAssertEqual(retained.programs.first?.title, "Shared news")
+        XCTAssertEqual(retained.updatedAt, first.updatedAt)
+        XCTAssertNotNil(retained.message)
+        XCTAssertLessThanOrEqual(retained.nextRefresh.timeIntervalSinceNow, 60)
+    }
+
+    func testChannelViewFallsBackToAPIWhenXMLTVIsUnusable() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("fallback-guide-tests-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloads = GuideDownloads(); await downloads.configure("<tv/>")
+        let index = GuideSearchIndex(url: root.appendingPathComponent("guide.sqlite"), download: { try await downloads.download($0) })
+        let channel = M3UItem(name: "News", streamURL: URL(string: "https://provider.example/live/user/pass/1.ts")!, tvgID: "one", contentType: .live)
+        let guide = TVGuide { _ in
+            let file = root.appendingPathComponent("channel.json")
+            let json = "{\"epg_listings\":[{\"title\":\"Actual channel news\",\"start_timestamp\":\(Date().addingTimeInterval(-60).timeIntervalSince1970),\"end_timestamp\":\(Date().addingTimeInterval(600).timeIntervalSince1970)}]}"
+            try Data(json.utf8).write(to: file)
+            return file
+        }
+        let result = try await guide.load(for: channel, index: index, channels: [channel], force: true)
+        XCTAssertEqual(result.programs.first?.title, "Actual channel news")
+        XCTAssertNotNil(result.message)
+        XCTAssertLessThanOrEqual(result.nextRefresh.timeIntervalSinceNow, 60)
+    }
+
+    func testModelUsesCacheExpiryAndRetriesFailuresInOneMinute() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("guide-clock-tests-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let downloads = GuideDownloads()
+        let formatter = DateFormatter(); formatter.dateFormat = "yyyyMMddHHmmss Z"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        await downloads.configure("""
+        <tv><programme channel="one" start="\(formatter.string(from: Date().addingTimeInterval(-60)))" stop="\(formatter.string(from: Date().addingTimeInterval(600)))"><title>News</title></programme></tv>
+        """)
+        let index = GuideSearchIndex(url: root.appendingPathComponent("guide.sqlite"), download: { try await downloads.download($0) })
+        let channel = M3UItem(name: "News", streamURL: URL(string: "https://provider.example/live/user/pass/1.ts")!, tvgID: "one", contentType: .live)
+        let downloadedAt = Date().addingTimeInterval(-10_000)
+        let seeded = try await index.refresh(channels: [channel], now: downloadedAt)
+        let model = GuideSearchModel(index: index)
+        defer { model.cancel() }
+        model.setChannels([channel])
+        for _ in 0..<100 where model.indexing { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(model.nextRefresh.timeIntervalSince1970, seeded.nextRefresh.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(model.summary?.lastUpdated).timeIntervalSince1970, downloadedAt.timeIntervalSince1970, accuracy: 0.001)
+        await downloads.configure("<tv>", delay: 100_000_000)
+        model.refresh(force: true)
+        model.tick(now: .distantFuture)
+        for _ in 0..<100 where model.indexing { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(model.summary?.failedFeeds, 1)
+        XCTAssertLessThanOrEqual(model.nextRefresh.timeIntervalSinceNow, 60)
+        XCTAssertGreaterThan(model.nextRefresh.timeIntervalSinceNow, 50)
+        let requests = await downloads.requests()
+        XCTAssertEqual(requests, 2, "Timer must not restart an in-progress refresh")
+    }
+
     func testDebounceClearingAndSourceSwitchDiscardStaleResultsWithoutTouchingPlayer() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("guide-model-tests-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

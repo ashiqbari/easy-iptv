@@ -74,6 +74,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     let subtitles = SubtitleController()
     let progressStore: PlaybackProgressStore
     let recentlyWatchedStore: RecentlyWatchedStore
+    let guideIndex = GuideSearchIndex()
+    @Published var guideRevision = UUID()
     private var libraryItemsByKey: [String: M3UItem] = [:]
     private var recordedCurrentPlayback = false
     let downloads: DownloadManager
@@ -574,6 +576,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             
             // Persist the successfully loaded playlist URL and cached channels to disk
             storageDefaults.set(urlString, forKey: lastPlaylistKey)
+            storageDefaults.removeObject(forKey: "com.iptvplayer.savedXtream")
             self.persistLoadedChannels()
             self.isLoading = false
             
@@ -1084,7 +1087,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Re-syncs and refreshes the current Xtream Codes server or M3U playlist to fetch updated channels.
     public func refreshPlaylist() async {
-        if let saved = storageDefaults.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String],
+        if !playlistURLString.hasPrefix("Xtream:"),
+           let savedURL = storageDefaults.string(forKey: lastPlaylistKey), !savedURL.isEmpty,
+           !savedURL.hasPrefix("Xtream:") {
+            await loadPlaylist(from: savedURL)
+        } else if let saved = storageDefaults.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String],
            let server = saved["server"], let user = saved["username"], let pass = saved["password"], !server.isEmpty {
             await loadXtream(serverURL: server, username: user, password: pass)
         } else if let savedURL = storageDefaults.string(forKey: lastPlaylistKey), !savedURL.isEmpty {

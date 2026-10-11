@@ -1354,6 +1354,7 @@ public struct NativeEPGSheetView: View {
     public init(channel: M3UItem, manager: IPTVPlayerManager) {
         self.channel = channel
         self.manager = manager
+        _seenGuideRevision = State(initialValue: manager.guideRevision)
     }
     
     @State private var programs: [GuideProgram] = []
@@ -1361,6 +1362,13 @@ public struct NativeEPGSheetView: View {
     @State private var guideError: String?
     @State private var now = Date()
     @State private var reload = 0
+    @State private var forceGuideRefresh = false
+    @State private var guideUpdatedAt: Date?
+    @State private var nextGuideRefresh = Date.distantPast
+    @State private var guideStatus: String?
+    @State private var seenGuideRevision: UUID
+    @State private var guideRefreshID = UUID()
+    @State private var loadedGuideChannel: String?
     private let guide = TVGuide()
     private var remainingPrograms: [GuideProgram] { TVGuide.remainingToday(programs, now: now) }
     
@@ -1411,6 +1419,14 @@ public struct NativeEPGSheetView: View {
                         
                         Divider()
                             .padding(.horizontal, 20)
+
+                        if let guideUpdatedAt {
+                            Text("\(isLoading ? "Previous download" : "Last downloaded") \(guideUpdatedAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20)
+                        }
+                        if let guideStatus, !isLoading {
+                            Text(guideStatus).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 20)
+                        }
                         
                         // ON AIR NOW FEATURE CARD
                         if isLoading {
@@ -1418,7 +1434,7 @@ public struct NativeEPGSheetView: View {
                         } else if let guideError {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text(guideError)
-                                Button("Retry") { reload += 1 }
+                                Button("Retry") { forceGuideRefresh = true; reload += 1 }
                             }
                             .padding(20)
                         } else if remainingPrograms.isEmpty {
@@ -1545,6 +1561,18 @@ public struct NativeEPGSheetView: View {
                 }
             }
             .navigationTitle("Program Guide")
+            .toolbar {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        forceGuideRefresh = true
+                        reload += 1
+                    } label: {
+                        Label("Refresh guides", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(isLoading)
+                    .help("Download fresh guide listings for the current library")
+                }
+            }
             #if os(macOS)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -1564,20 +1592,45 @@ public struct NativeEPGSheetView: View {
             #endif
         }
         .frame(minWidth: 500, minHeight: 450)
-        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) {
+            now = $0
+            if !isLoading, now >= nextGuideRefresh { reload += 1 }
+        }
+        .onReceive(manager.$guideRevision) { revision in
+            if revision != seenGuideRevision {
+                seenGuideRevision = revision
+                reload += 1
+            }
+        }
         .task(id: "\(channel.subtitleCacheKey)|\(reload)|\(Calendar.current.startOfDay(for: now).timeIntervalSince1970)") {
+            if loadedGuideChannel != channel.subtitleCacheKey {
+                programs = []
+                guideUpdatedAt = nil
+                guideStatus = nil
+                loadedGuideChannel = channel.subtitleCacheKey
+            }
+            let force = forceGuideRefresh
+            forceGuideRefresh = false
             isLoading = true
             guideError = nil
-            programs = []
             do {
-                let result = try await guide.load(for: channel)
+                let result = try await guide.load(for: channel, index: manager.guideIndex, channels: manager.channels, force: force)
                 try Task.checkCancellation()
-                programs = result
+                programs = result.programs
+                guideUpdatedAt = result.updatedAt
+                nextGuideRefresh = result.nextRefresh
+                guideStatus = result.message ?? (force ? "Guide refreshed." : "Guide listings loaded.")
             } catch {
                 guard !Task.isCancelled else { return }
-                guideError = (error as? GuideError)?.localizedDescription ?? "Could not load the TV guide. Please try again."
+                guideError = error.localizedDescription
+                guideStatus = remainingPrograms.isEmpty ? nil : "Refresh failed. Showing previously loaded listings."
+                nextGuideRefresh = Date().addingTimeInterval(60)
             }
             isLoading = false
+            if force {
+                seenGuideRevision = guideRefreshID
+                manager.guideRevision = guideRefreshID
+            }
         }
     }
     

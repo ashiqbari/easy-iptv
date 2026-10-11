@@ -33,6 +33,16 @@ struct GuideRefreshSummary: Sendable {
     let unavailableChannels: Int
     let failedFeeds: Int
     let failureMessage: String?
+    let channelsWithoutListings: Int
+    let downloadedFeeds: Int
+    let lastUpdated: Date?
+    let nextRefresh: Date
+
+    var status: String {
+        let action = downloadedFeeds > 0 ? "Guide updated" : lastUpdated == nil ? "No guide listings available" : "Using cached guide"
+        let date = lastUpdated.map { " · Last downloaded \($0.formatted(date: .abbreviated, time: .shortened))" } ?? ""
+        return "\(action) · \(searchableChannels) channels with listings\(date)"
+    }
 }
 
 // Separate connections let searches read the last committed guide while a refresh imports XML.
@@ -43,7 +53,7 @@ actor GuideSearchIndex {
         .appendingPathComponent("guide-v1.sqlite")
     private let url: URL
     private let download: Download
-    private var refreshTask: (id: UUID, task: Task<GuideRefreshSummary, Error>)?
+    private var refreshTask: (id: UUID, request: String, force: Bool, waiters: Set<UUID>, task: Task<GuideRefreshSummary, Error>)?
 
     init(url: URL = cacheURL, download: @escaping Download = { try await GuideSearchIndex.downloadFeed($0) }) {
         self.url = url; self.download = download
@@ -66,13 +76,22 @@ actor GuideSearchIndex {
 
     func refresh(channels: [M3UItem], force: Bool = false, now: Date = Date(),
                  calendar: Calendar = .current) async throws -> GuideRefreshSummary {
-        if let previous = refreshTask, previous.task.isCancelled {
+        let request = Self.key(channels.filter { $0.contentType == .live }.map {
+            "\(Self.channelKey($0))|\($0.tvgID ?? "")|\(TVGuide.feedURL(for: $0)?.absoluteString ?? "")"
+        }.sorted().joined(separator: "\n"))
+        if let previous = refreshTask,
+           previous.task.isCancelled || previous.request != request || (force && !previous.force) {
+            if previous.request != request { previous.task.cancel() }
             _ = try? await previous.task.value
             if refreshTask?.id == previous.id { refreshTask = nil }
         }
         try Task.checkCancellation()
+        let waiter = UUID()
         let task: Task<GuideRefreshSummary, Error>, id: UUID
-        if let existing = refreshTask { task = existing.task; id = existing.id }
+        if let existing = refreshTask {
+            task = existing.task; id = existing.id
+            refreshTask?.waiters.insert(waiter)
+        }
         else {
             id = UUID()
             let url = self.url, download = self.download
@@ -80,10 +99,23 @@ actor GuideSearchIndex {
                 try await Self.importFeeds(channels: channels, url: url, force: force,
                                            now: now, calendar: calendar, download: download)
             }
-            refreshTask = (id, task)
+            refreshTask = (id, request, force, [waiter], task)
         }
-        defer { if refreshTask?.id == id { refreshTask = nil } }
-        return try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+        defer { releaseWaiter(waiter, refresh: id) }
+        return try await withTaskCancellationHandler(operation: {
+            let result = try await task.value
+            try Task.checkCancellation()
+            return result
+        }, onCancel: { Task { await self.releaseWaiter(waiter, refresh: id) } })
+    }
+
+    private func releaseWaiter(_ waiter: UUID, refresh id: UUID) {
+        guard refreshTask?.id == id else { return }
+        refreshTask?.waiters.remove(waiter)
+        if refreshTask?.waiters.isEmpty == true {
+            refreshTask?.task.cancel()
+            // Keep the task until it has stopped writing; the next refresh joins its cleanup.
+        }
     }
 
     func search(_ text: String, scope: GuideSearchScope, offset: Int = 0,
@@ -124,6 +156,40 @@ actor GuideSearchIndex {
         return GuideSearchPage(hits: Array(hits.prefix(50)), hasMore: hits.count > 50)
     }
 
+    func downloadStatus(for channel: M3UItem) throws -> (updatedAt: Date?, failed: Bool) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return (nil, false) }
+        let db = try GuideDatabase(url: url, readOnly: true)
+        let statement = try db.prepare("""
+            SELECT f.updated, failed.feed FROM channels c
+            LEFT JOIN freshness f ON f.feed=c.feed
+            LEFT JOIN failed_feeds failed ON failed.feed=c.feed WHERE c.key=?
+            """)
+        try statement.bind([Self.channelKey(channel)])
+        guard try statement.step() else { return (nil, false) }
+        let timestamp = statement.number(0)
+        return (timestamp > 0 ? Date(timeIntervalSince1970: timestamp) : nil, !statement.text(1).isEmpty)
+    }
+
+    func programs(for channel: M3UItem, now: Date = Date(), calendar: Calendar = .current) throws -> [GuideProgram] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let db = try GuideDatabase(url: url, readOnly: true)
+        let statement = try db.prepare("""
+            SELECT p.title,p.description,p.start,p.end,p.categories FROM programs p
+            JOIN channels c ON c.feed=p.feed AND c.tvg=p.tvg
+            WHERE c.key=? AND p.end>? AND p.start<? ORDER BY p.start
+            """)
+        let midnight = calendar.dateInterval(of: .day, for: now)?.end ?? now
+        try statement.bind([Self.channelKey(channel), String(now.timeIntervalSince1970), String(midnight.timeIntervalSince1970)])
+        var result: [GuideProgram] = []
+        while try statement.step() {
+            try Task.checkCancellation()
+            result.append(GuideProgram(title: statement.text(0), description: statement.text(1),
+                                       start: Date(timeIntervalSince1970: statement.number(2)),
+                                       end: Date(timeIntervalSince1970: statement.number(3)), categories: statement.text(4)))
+        }
+        return result
+    }
+
     private static func importFeeds(channels: [M3UItem], url: URL, force: Bool, now: Date,
                                     calendar: Calendar, download: Download) async throws -> GuideRefreshSummary {
         try Task.checkCancellation()
@@ -145,6 +211,7 @@ actor GuideSearchIndex {
             }
             try db.execute("DELETE FROM programs WHERE feed NOT IN (SELECT feed FROM channels)")
             try db.execute("DELETE FROM freshness WHERE feed NOT IN (SELECT feed FROM channels)")
+            try db.execute("DELETE FROM failed_feeds WHERE feed NOT IN (SELECT feed FROM channels)")
             let prune = try db.prepare("DELETE FROM programs WHERE end <= ?")
             try prune.bind([String(now.timeIntervalSince1970)])
             _ = try prune.step()
@@ -152,39 +219,56 @@ actor GuideSearchIndex {
         let midnight = calendar.dateInterval(of: .day, for: now)?.end ?? now
         var failures = 0
         var failureMessage: String?
+        var downloaded = 0
+        var nextRefresh = midnight
         for (feed, ids) in feeds.sorted(by: { $0.key.absoluteString < $1.key.absoluteString }) {
             try Task.checkCancellation()
             let feedKey = key(feed.absoluteString)
             let fingerprint = key(ids.sorted().joined(separator: "\n"))
-            let cached = try db.prepare("SELECT updated, until, fingerprint FROM freshness WHERE feed = ?")
-            try cached.bind([feedKey])
-            if !force, try cached.step(), now.timeIntervalSince1970 - cached.number(0) < 10_800,
+            let cached = try db.prepare("SELECT updated, until, fingerprint, NOT EXISTS(SELECT 1 FROM failed_feeds WHERE feed=?) FROM freshness WHERE feed = ?")
+            try cached.bind([feedKey, feedKey])
+            let hasCache = try cached.step()
+            if !force, hasCache, cached.number(3) == 1, now.timeIntervalSince1970 - cached.number(0) < 10_800,
                cached.number(0) <= now.timeIntervalSince1970,
-               cached.number(1) == midnight.timeIntervalSince1970, cached.text(2) == fingerprint { continue }
+               cached.number(1) == midnight.timeIntervalSince1970, cached.text(2) == fingerprint {
+                nextRefresh = min(nextRefresh, Date(timeIntervalSince1970: cached.number(0) + 10_800))
+                continue
+            }
             do {
                 let file = try await download(feed)
                 defer { try? FileManager.default.removeItem(at: file) }
                 try Task.checkCancellation()
                 guard let stream = InputStream(url: file) else { throw GuideError.invalidFeed }
                 try importXML(XMLParser(stream: stream), db: db, feedKey: feedKey,
-                              channelIDs: ids, now: now, calendar: calendar)
-                let stamp = try db.prepare("INSERT OR REPLACE INTO freshness VALUES(?,?,?,?)")
-                try stamp.bind([feedKey, String(now.timeIntervalSince1970), String(midnight.timeIntervalSince1970), fingerprint])
-                _ = try stamp.step()
+                              channelIDs: ids, now: now, calendar: calendar, fingerprint: fingerprint)
+                downloaded += 1
+                nextRefresh = min(nextRefresh, now.addingTimeInterval(10_800))
             } catch {
                 try Task.checkCancellation()
                 failures += 1
                 failureMessage = (error as? GuideSearchError)?.errorDescription
                     ?? (error as? GuideError)?.errorDescription ?? GuideError.download.errorDescription
+                let failed = try db.prepare("INSERT OR IGNORE INTO failed_feeds VALUES(?)")
+                try failed.bind([feedKey]); _ = try failed.step()
+                nextRefresh = min(nextRefresh, now.addingTimeInterval(60))
             }
         }
+        let coverage = try db.prepare("SELECT count(DISTINCT c.key) FROM channels c JOIN programs p ON c.feed=p.feed AND c.tvg=p.tvg WHERE p.end>? AND p.start<?")
+        try coverage.bind([String(now.timeIntervalSince1970), String(midnight.timeIntervalSince1970)])
+        _ = try coverage.step()
+        let available = Int(coverage.number(0))
+        let freshness = try db.prepare("SELECT max(updated) FROM freshness WHERE feed IN (SELECT feed FROM channels)")
+        _ = try freshness.step()
+        let lastUpdated = freshness.number(0) > 0 ? Date(timeIntervalSince1970: freshness.number(0)) : nil
         try? db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        return GuideRefreshSummary(searchableChannels: mapped, unavailableChannels: live.count - mapped,
-                                   failedFeeds: failures, failureMessage: failureMessage)
+        return GuideRefreshSummary(searchableChannels: available, unavailableChannels: live.count - mapped,
+                                   failedFeeds: failures, failureMessage: failureMessage,
+                                   channelsWithoutListings: mapped - available, downloadedFeeds: downloaded,
+                                   lastUpdated: lastUpdated, nextRefresh: nextRefresh)
     }
 
     static func importXML(_ parser: XMLParser, db: GuideDatabase, feedKey: String,
-                          channelIDs: Set<String>, now: Date, calendar: Calendar) throws {
+                          channelIDs: Set<String>, now: Date, calendar: Calendar, fingerprint: String? = nil) throws {
         try db.transaction {
             let remove = try db.prepare("DELETE FROM programs WHERE feed = ?")
             try remove.bind([feedKey]); _ = try remove.step()
@@ -205,6 +289,17 @@ actor GuideSearchIndex {
             try Task.checkCancellation()
             if let error = delegate.failure { throw error }
             guard parsed, delegate.isTV else { throw GuideError.invalidFeed }
+            guard count > 0 else {
+                throw delegate.matchedChannels.isEmpty ? GuideError.noMatchingChannel : GuideError.noUpcomingPrograms
+            }
+            if let fingerprint {
+                let midnight = calendar.dateInterval(of: .day, for: now)?.end ?? now
+                let stamp = try db.prepare("INSERT OR REPLACE INTO freshness VALUES(?,?,?,?)")
+                try stamp.bind([feedKey, String(now.timeIntervalSince1970), String(midnight.timeIntervalSince1970), fingerprint])
+                _ = try stamp.step()
+                let recovered = try db.prepare("DELETE FROM failed_feeds WHERE feed=?")
+                try recovered.bind([feedKey]); _ = try recovered.step()
+            }
         }
     }
 
@@ -217,6 +312,7 @@ actor GuideSearchIndex {
         let session = URLSession(configuration: configuration)
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 45
         let (file, response) = try await session.download(for: request, delegate: GuideDownloadLimit())
         do {
@@ -275,6 +371,7 @@ final class GuideDatabase {
                         categories TEXT NOT NULL, UNIQUE(feed,tvg,start,end,title));
                     CREATE INDEX IF NOT EXISTS program_time ON programs(start,end);
                     CREATE TABLE IF NOT EXISTS freshness(feed TEXT PRIMARY KEY, updated REAL, until REAL, fingerprint TEXT);
+                    CREATE TABLE IF NOT EXISTS failed_feeds(feed TEXT PRIMARY KEY);
                     CREATE VIRTUAL TABLE IF NOT EXISTS guide_fts USING fts5(title,description,categories,content='programs',content_rowid='id');
                     CREATE TRIGGER IF NOT EXISTS program_insert AFTER INSERT ON programs BEGIN
                         INSERT INTO guide_fts(rowid,title,description,categories) VALUES(new.id,new.title,new.description,new.categories);
