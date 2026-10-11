@@ -51,7 +51,7 @@ public struct ContentView: View {
         self.manager = manager
     }
     
-    public var body: some View {
+    private var libraryContent: some View {
         Group {
 #if os(macOS)
             GeometryReader { geometry in
@@ -87,19 +87,35 @@ public struct ContentView: View {
             }
 #endif
         }
+    }
+
+    public var body: some View {
+        ZStack {
+            // Exclude underlying controls from the native focus loop without unmounting playback.
+            libraryContent
+                .disabled(manager.showingDownloads)
+                .allowsHitTesting(!manager.showingDownloads)
+                .accessibilityHidden(manager.showingDownloads)
+            if manager.showingDownloads {
+                DownloadsDialog(manager: manager, downloads: manager.downloads)
+            }
+        }
         .sheet(isPresented: $manager.showingPlaylistSheet) {
             playlistInputSheet
         }
         .sheet(isPresented: $manager.showingAboutSheet) {
             aboutSheet
         }
-        .sheet(isPresented: $manager.showingDownloads, onDismiss: {
+        .onChange(of: manager.showingDownloads) { _, showing in
+            guard !showing else { return }
             if let record = manager.pendingDownload {
                 manager.pendingDownload = nil
-                manager.playDownload(record)
+                // Let the overlay close before presenting the existing resume choice.
+                Task { @MainActor in
+                    await Task.yield()
+                    manager.playDownload(record)
+                }
             }
-        }) {
-            DownloadsView(manager: manager, downloads: manager.downloads)
         }
         .alert("Download issue", isPresented: Binding(
             get: { manager.downloads.errorMessage != nil },
@@ -190,6 +206,9 @@ public struct ContentView: View {
                             .help("Show the channel sidebar")
                             .keyboardShortcut("2", modifiers: [.command, .shift])
                         }
+                        ToolbarItemGroup(placement: .automatic) {
+                            DownloadHeaderControls(manager: manager, downloads: manager.downloads)
+                        }
                     }
             }
             .navigationSplitViewStyle(.balanced)
@@ -269,9 +288,6 @@ public struct ContentView: View {
             
             List(selection: $manager.selectedCategory) {
                 Section("Quick Access") {
-                    Button { manager.showingDownloads = true } label: {
-                        Label("Downloads", systemImage: "arrow.down.circle")
-                    }
                     if !manager.downloads.isOnline {
                         Text("Offline — open Downloads to watch saved media.").font(.caption).foregroundStyle(.secondary)
                     }

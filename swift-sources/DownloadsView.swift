@@ -113,65 +113,155 @@ struct DownloadSeasonControl: View {
     }
 }
 
-struct DownloadsView: View {
+struct DownloadHeaderControls: View {
     @ObservedObject var manager: IPTVPlayerManager
     @ObservedObject var downloads: DownloadManager
-    @Environment(\.dismiss) private var dismiss
-    @State private var confirmingAll = false
+    @FocusState private var downloadsFocused: Bool
+
+    static func activeCount(_ records: [DownloadRecord]) -> Int {
+        records.filter { $0.status == .queued || $0.status == .downloading }.count
+    }
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                if !downloads.isOnline {
-                    Text("You're offline. Downloaded movies and episodes are ready to play.")
-                        .font(.callout).foregroundStyle(.secondary).padding()
-                }
-                if let error = downloads.errorMessage {
-                    Text(error).font(.callout).foregroundStyle(.red).padding()
-                }
-                if downloads.loading { ProgressView("Loading downloads…").padding() }
-                if !downloads.loading && !downloads.ready {
-                    Text("Downloads couldn't be opened. Check storage access and reopen the app.").foregroundStyle(.secondary).padding()
-                }
-                if downloads.ready && downloads.records.isEmpty {
-                    VStack(spacing: 12) {
-                        Image(systemName: "arrow.down.circle").font(.largeTitle)
-                        Text("No downloads yet").font(.headline)
-                        Text("Download movies from their details page, or episodes from a series.").foregroundStyle(.secondary)
-                    }
-                    .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    List {
-                        let movies = downloads.records.filter { $0.item.contentType == .movie }
-                        if !movies.isEmpty { Section("Movies") { ForEach(movies) { row($0) } } }
-                        let shows = Dictionary(grouping: downloads.records.filter { $0.item.contentType == .series }, by: \.seriesKey)
-                        ForEach(shows.keys.sorted(), id: \.self) { key in
-                            let episodes = shows[key] ?? []
-                            Section(episodes.first?.series?.name ?? episodes.first?.item.groupTitle ?? "TV Shows") {
-                                let seasons = Dictionary(grouping: episodes, by: { $0.item.seasonNumber ?? 0 })
-                                ForEach(seasons.keys.sorted(), id: \.self) { season in
-                                    Text(season > 0 ? "Season \(season)" : (seasons[season]?.first?.item.groupTitle ?? "Episodes"))
-                                        .font(.headline).foregroundStyle(.secondary)
-                                    ForEach((seasons[season] ?? []).sorted { ($0.item.episodeNumber ?? 0) < ($1.item.episodeNumber ?? 0) }) { row($0) }
-                                }
-                            }
-                        }
-                    }
-                }
+        Group {
+            Button { Task { await manager.refreshPlaylist() } } label: {
+                Label("Refresh & Sync", systemImage: "arrow.clockwise")
             }
-            .navigationTitle("Downloads")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Delete all downloads…", role: .destructive) { confirmingAll = true }
-                        .disabled(downloads.records.isEmpty || !downloads.deleting.isEmpty)
+            .help("Refresh and sync latest channels, movies, and TV shows")
+            .disabled(manager.isLoading)
+
+            Button { manager.showingDownloads = true } label: {
+                Label("Downloads", systemImage: "arrow.down.circle")
+            }
+            .focused($downloadsFocused)
+            .help("Downloads")
+            .accessibilityLabel("Downloads")
+            .accessibilityValue("\(Self.activeCount(downloads.records)) active downloads")
+            .overlay(alignment: .topTrailing) {
+                let count = Self.activeCount(downloads.records)
+                if count > 0 {
+                    Text("\(count)").font(.system(size: 9, weight: .semibold))
+                        .padding(.horizontal, 4).padding(.vertical, 1)
+                        .foregroundStyle(.white).background(.blue, in: Capsule())
+                        .offset(x: 8, y: -7).allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
         }
+        .onChange(of: manager.showingDownloads) { _, showing in
+            if !showing {
+                Task { @MainActor in
+                    await Task.yield()
+                    if !manager.showingDownloads { downloadsFocused = true }
+                }
+            }
+        }
+    }
+}
+
+struct DownloadsDialog: View {
+    @ObservedObject var manager: IPTVPlayerManager
+    @ObservedObject var downloads: DownloadManager
+
+    static func size(in container: CGSize) -> CGSize {
+        CGSize(width: min(760, max(0, container.width - 24)),
+               height: min(container.width < 600 ? container.height : 720, max(0, container.height - 24)))
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.opacity(0.4).ignoresSafeArea()
+                    .onTapGesture { manager.showingDownloads = false }
+                    .accessibilityHidden(true)
+                DownloadsView(manager: manager, downloads: downloads)
+                    .frame(width: Self.size(in: geometry.size).width, height: Self.size(in: geometry.size).height)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .shadow(radius: 20)
+                    .contentShape(Rectangle())
+                    .onTapGesture { } // Only taps outside the card dismiss it.
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+struct DownloadsView: View {
+    @ObservedObject var manager: IPTVPlayerManager
+    @ObservedObject var downloads: DownloadManager
+    @State private var confirmingAll = false
+    @FocusState private var closeFocused: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Downloads").font(.title2.bold())
+                Spacer()
+                Button { manager.showingDownloads = false } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .padding(8)
+                .frame(minWidth: 44, minHeight: 44)
+                .accessibilityLabel("Close Downloads")
+                .help("Close Downloads")
+                .keyboardShortcut(.cancelAction)
+                .focused($closeFocused)
+            }.padding()
+            Divider()
+            if !downloads.isOnline {
+                Text("You're offline. Downloaded movies and episodes are ready to play.")
+                    .font(.callout).foregroundStyle(.secondary).padding()
+            }
+            if let error = downloads.errorMessage {
+                Text(error).font(.callout).foregroundStyle(.red).padding()
+            }
+            if downloads.loading { ProgressView("Loading downloads…").padding() }
+            if !downloads.loading && !downloads.ready {
+                Text("Downloads couldn't be opened. Check storage access and reopen the app.").foregroundStyle(.secondary).padding()
+            }
+            if downloads.ready {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        let movies = downloads.records.filter { $0.item.contentType == .movie }
+                        Text("Movies (\(movies.count))").font(.headline)
+                        if movies.isEmpty { Text("No downloaded movies").foregroundStyle(.secondary) }
+                        ForEach(movies) { row($0) }
+                        Divider()
+                        let shows = Dictionary(grouping: downloads.records.filter { $0.item.contentType == .series }, by: \.seriesKey)
+                        Text("Series (\(shows.count))").font(.headline)
+                        if shows.isEmpty { Text("No downloaded series").foregroundStyle(.secondary) }
+                        ForEach(shows.keys.sorted(), id: \.self) { key in
+                            let episodes = shows[key] ?? []
+                            DisclosureGroup("\(episodes.first?.series?.name ?? episodes.first?.item.groupTitle ?? "TV Shows") (\(episodes.count))") {
+                                let seasons = Dictionary(grouping: episodes, by: { $0.item.seasonNumber ?? 0 })
+                                ForEach(seasons.keys.sorted(), id: \.self) { season in
+                                    DisclosureGroup("\(season > 0 ? "Season \(season)" : "Episodes") (\(seasons[season]?.count ?? 0))") {
+                                        ForEach((seasons[season] ?? []).sorted { ($0.item.episodeNumber ?? 0) < ($1.item.episodeNumber ?? 0) }) { row($0) }
+                                    }.padding(.leading, 12)
+                                }
+                            }
+                        }
+                    }.padding()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            Spacer(minLength: 0)
+            Divider()
+            HStack {
+                Spacer()
+                Button("Delete all downloads…", role: .destructive) { confirmingAll = true }
+                    .disabled(downloads.records.isEmpty || !downloads.deleting.isEmpty)
+            }.padding()
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Downloads")
+        .onAppear { closeFocused = true }
         #if os(macOS)
-        .frame(minWidth: 560, idealWidth: 740, minHeight: 500, idealHeight: 650)
+        .focusSection()
+        .onExitCommand { manager.showingDownloads = false }
+        #else
+        .accessibilityAddTraits(.isModal)
         #endif
         .confirmationDialog("Delete all downloads?", isPresented: $confirmingAll, titleVisibility: .visible) {
             Button("Delete all downloads", role: .destructive) {
@@ -192,20 +282,28 @@ struct DownloadsView: View {
                 }
                 Text(record.totalBytes > 0
                     ? "\(record.title) • \(ByteCountFormatter.string(fromByteCount: record.bytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: record.totalBytes, countStyle: .file))"
+                    : record.bytes > 0 ? "\(record.title) • \(ByteCountFormatter.string(fromByteCount: record.bytes, countStyle: .file))"
                     : "\(record.title) • Size not available yet").font(.caption).foregroundStyle(.secondary)
-                if record.status != .downloaded {
-                    ProgressView(value: record.progress).accessibilityLabel("Download progress for \(record.item.name)")
-                }
+                ProgressView(value: record.status == .downloaded ? 1 : record.progress)
+                    .accessibilityLabel("Download progress for \(record.item.name)")
                 if let message = record.message { Text(message).font(.caption).foregroundStyle(record.status == .failed ? .red : .secondary) }
-                HStack {
-                    if downloads.localURL(for: record.item) != nil {
-                        Button { manager.pendingDownload = record; dismiss() } label: { Label("Play", systemImage: "play.fill") }
-                    }
-                    DownloadControl(item: record.item, series: record.series, downloads: downloads)
+                ViewThatFits(in: .horizontal) {
+                    HStack { actions(record) }
+                    VStack(alignment: .leading) { actions(record) }
                 }
                 .buttonStyle(.bordered)
             }
         }
         .padding(.vertical, 6)
+    }
+
+    @ViewBuilder private func actions(_ record: DownloadRecord) -> some View {
+        if downloads.localURL(for: record.item) != nil {
+            Button {
+                manager.pendingDownload = record
+                manager.showingDownloads = false
+            } label: { Label("Play", systemImage: "play.fill") }
+        }
+        DownloadControl(item: record.item, series: record.series, downloads: downloads)
     }
 }

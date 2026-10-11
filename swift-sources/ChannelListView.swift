@@ -86,16 +86,8 @@ public struct ChannelListView: View {
                 .keyboardShortcut("2", modifiers: [.command, .shift])
             }
             #endif
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    Task {
-                        await manager.refreshPlaylist()
-                    }
-                } label: {
-                    Label("Refresh & Sync", systemImage: "arrow.clockwise")
-                }
-                .help("Refresh and sync latest channels, movies, and TV shows")
-                .disabled(manager.isLoading)
+            ToolbarItemGroup(placement: .automatic) {
+                DownloadHeaderControls(manager: manager, downloads: manager.downloads)
             }
         }
     }

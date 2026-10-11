@@ -2,6 +2,7 @@ import XCTest
 import SwiftUI
 #if os(macOS)
 import AppKit
+import VLC
 #endif
 @testable import EasyIPTV
 
@@ -10,6 +11,98 @@ final class SearchTests: XCTestCase {
     func testTopShortcutsDoNotIncludeProviderCategories() {
         XCTAssertEqual(ChannelListView.categoryShortcuts, ["All", "Favorites"])
     }
+
+    func testDownloadsDialogPreservesCategorySearchAndPlayer() async throws {
+        try await checkDownloadsDialog(useVLC: false)
+    }
+
+    #if os(macOS)
+    func testDownloadsDialogKeepsVLCDrawableMounted() async throws {
+        try await checkDownloadsDialog(useVLC: true)
+    }
+    #endif
+
+    private func checkDownloadsDialog(useVLC: Bool) async throws {
+        let suite = "downloads-shortcut-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer { manager.stop() }
+        manager.playDirectStream(M3UItem(name: "Fixture", streamURL: URL(fileURLWithPath: "/private/tmp/downloads-shortcut.mp4"), contentType: useVLC ? .live : .movie))
+        manager.player?.replaceCurrentItem(with: nil)
+        manager.selectedCategory = "Favorites"
+        manager.searchText = "Fixture"
+        let player = manager.player
+        #if os(macOS)
+        let hosting = NSHostingView(rootView: ContentView(manager: manager))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = hosting
+        defer { window.close() }
+        let vlcPlayer = manager.vlcPlayer
+        func surface(_ view: NSView) -> NSView? {
+            if useVLC { return manager.vlcPlayer?.drawable as? NSView }
+            return (view as? AVPlayerLayerNSView) ?? view.subviews.lazy.compactMap { surface($0) }.first
+        }
+        hosting.layoutSubtreeIfNeeded()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let original = try XCTUnwrap(surface(hosting))
+        #endif
+        for showing in [true, false, true, false] {
+            manager.showingDownloads = showing
+            #if os(macOS)
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 100_000_000)
+            XCTAssertTrue(surface(hosting) === original, "The modal must not remount the video surface")
+            XCTAssertTrue(manager.vlcPlayer === vlcPlayer)
+            #endif
+            XCTAssertEqual(manager.selectedCategory, "Favorites")
+            XCTAssertEqual(manager.searchText, "Fixture")
+            XCTAssertTrue(manager.player === player)
+        }
+    }
+
+    func testDownloadsBadgeOnlyCountsQueuedAndDownloading() {
+        let item = M3UItem(name: "Fixture", streamURL: URL(fileURLWithPath: "/private/tmp/badge.mp4"), contentType: .movie)
+        var records = [DownloadStatus.queued, .downloading, .paused, .failed, .downloaded].map {
+            DownloadRecord(id: UUID().uuidString, item: item, series: nil, status: $0)
+        }
+        XCTAssertEqual(DownloadHeaderControls.activeCount(records), 2)
+        records[0].status = .paused
+        records[1].status = .downloaded
+        XCTAssertEqual(DownloadHeaderControls.activeCount(records), 0)
+        XCTAssertEqual(DownloadHeaderControls.activeCount([]), 0)
+    }
+
+    func testDownloadsDialogFitsNarrowAndDesktopContainers() {
+        XCTAssertEqual(DownloadsDialog.size(in: CGSize(width: 390, height: 844)), CGSize(width: 366, height: 820))
+        XCTAssertEqual(DownloadsDialog.size(in: CGSize(width: 1320, height: 820)), CGSize(width: 760, height: 720))
+        XCTAssertEqual(DownloadsDialog.size(in: CGSize(width: 320, height: 480)), CGSize(width: 296, height: 456))
+        XCTAssertEqual(DownloadsDialog.size(in: .zero), .zero)
+    }
+
+    #if os(macOS)
+    func testDownloadsDialogClosesOnEscape() async throws {
+        let suite = "downloads-modal-keyboard-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer { manager.stop() }
+        manager.showingDownloads = true
+        let hosting = NSHostingView(rootView: DownloadsView(manager: manager, downloads: manager.downloads))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 760, height: 700), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = hosting
+        defer { window.close() }
+        hosting.layoutSubtreeIfNeeded()
+        window.makeFirstResponder(hosting)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false, keyCode: 53))
+        hosting.keyDown(with: escape)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertFalse(manager.showingDownloads)
+    }
+    #endif
 
     func testCategorySearchIsIndependentOfChannelSearchSelectionAndPlayback() async throws {
         let suite = "category-search-\(UUID())"
