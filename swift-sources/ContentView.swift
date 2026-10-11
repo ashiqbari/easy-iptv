@@ -45,6 +45,7 @@ public struct ContentView: View {
     @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
     #if os(macOS)
     @State private var playbackBounds: CGRect = .zero
+    @State private var showingGuideSearch = false
     #endif
     
     public init(manager: IPTVPlayerManager) {
@@ -135,6 +136,7 @@ public struct ContentView: View {
             manager.pauseForBackground()
         }
         #if os(macOS)
+        .sheet(isPresented: $showingGuideSearch) { GuideSearchView(manager: manager) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
             manager.updateFullscreenState(true)
         }
@@ -205,9 +207,6 @@ public struct ContentView: View {
                             .help("Show the channel sidebar")
                             .keyboardShortcut("2", modifiers: [.command, .shift])
                         }
-                        ToolbarItemGroup(placement: .automatic) {
-                            DownloadHeaderControls(manager: manager, downloads: manager.downloads)
-                        }
                     }
             }
             .navigationSplitViewStyle(.balanced)
@@ -216,6 +215,18 @@ public struct ContentView: View {
 
     private var playbackPlaceholder: some View {
         Color.black
+            .toolbar {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    if manager.selectedSection == .live {
+                        Button { showingGuideSearch = true } label: {
+                            Label("Search TV Guide", systemImage: "text.magnifyingglass")
+                        }
+                        .help("Find channels by current or upcoming programmes")
+                        .keyboardShortcut("g", modifiers: [.command, .shift])
+                    }
+                    DownloadHeaderControls(manager: manager, downloads: manager.downloads)
+                }
+            }
             .background {
                 GeometryReader { geometry in
                     Color.clear.preference(key: PlaybackBoundsPreferenceKey.self,

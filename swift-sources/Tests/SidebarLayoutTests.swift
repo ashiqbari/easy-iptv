@@ -30,6 +30,68 @@ final class SidebarLayoutTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testChannelPanelStaysBelowHeaderAcrossTogglesAndWindowSizes() async throws {
+        let manager = manager()
+        let hosting = NSHostingView(rootView: ContentView(manager: manager))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820),
+                              styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.toolbarStyle = .unifiedCompact
+        window.contentView = hosting
+        defer { manager.stop(); window.close() }
+
+        func searchFields(_ view: NSView) -> [NSTextField] {
+            if let field = view as? NSTextField, field.placeholderString?.hasPrefix("Search") == true { return [field] }
+            return view.subviews.flatMap { searchFields($0) }
+        }
+        func settle() async throws {
+            for _ in 0..<10 {
+                hosting.layoutSubtreeIfNeeded()
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+        for size in [CGSize(width: 1320, height: 820), CGSize(width: 1000, height: 650)] {
+            window.setContentSize(size)
+            try await settle()
+            let headerBoundary = window.contentLayoutRect.maxY
+            let headerFrames = Dictionary(uniqueKeysWithValues: (window.toolbar?.items ?? []).compactMap { item -> (String, CGRect)? in
+                guard ["Search TV Guide", "Refresh & Sync", "Downloads"].contains(item.label), let view = item.view else { return nil }
+                return (item.label, view.convert(view.bounds, to: nil))
+            })
+            for showing in [true, false, true, false, true] {
+                if manager.showsChannelsSidebar != showing { manager.toggleChannelsSidebar() }
+                try await settle()
+                XCTAssertEqual(window.contentLayoutRect.maxY, headerBoundary, accuracy: 1,
+                               "Toggling Channels must not move or resize the window header")
+                let toolbar = try XCTUnwrap(window.toolbar)
+                for label in ["Appearance", "Add Source", "About", "Search TV Guide", "Refresh & Sync", "Downloads"] {
+                    let item = try XCTUnwrap(toolbar.visibleItems?.first { $0.label == label },
+                                             "\(label) must remain visible in the header")
+                    XCTAssertTrue(item.isEnabled)
+                    if let view = item.view {
+                        let frame = view.convert(view.bounds, to: nil)
+                        XCTAssertGreaterThanOrEqual(frame.minY, headerBoundary,
+                                                   "Header controls must not share the channel panel's content area")
+                        if let original = headerFrames[label] {
+                            XCTAssertEqual(frame, original, "\(label) must not move when Channels toggles")
+                        }
+                    }
+                }
+                let fields = searchFields(hosting)
+                let channelSearch = fields.first { $0.placeholderString == "Search in Live TV..." }
+                XCTAssertEqual(channelSearch != nil, showing)
+                if let channelSearch {
+                    let frame = channelSearch.convert(channelSearch.bounds, to: nil)
+                    XCTAssertLessThanOrEqual(frame.maxY, headerBoundary,
+                                             "The panel search must stay below the native header")
+                    XCTAssertGreaterThanOrEqual(frame.minY, window.contentLayoutRect.minY)
+                    // The panel heading must have room above search inside the content area.
+                    XCTAssertGreaterThan(headerBoundary - frame.maxY, 30)
+                }
+            }
+        }
+    }
+
     func testDownloadsDialogDoesNotMoveSidebarContentIntoTitlebar() async throws {
         let manager = manager()
         let hosting = NSHostingView(rootView: ContentView(manager: manager))

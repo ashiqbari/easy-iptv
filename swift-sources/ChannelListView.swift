@@ -12,7 +12,9 @@ import SwiftUI
 public struct ChannelListView: View {
     
     @ObservedObject var manager: IPTVPlayerManager
+    #if !os(macOS)
     @State private var showingGuideSearch = false
+    #endif
     static let categoryShortcuts = ["All", "Favorites"]
     
     public init(manager: IPTVPlayerManager) {
@@ -21,6 +23,23 @@ public struct ChannelListView: View {
     
     public var body: some View {
         VStack(spacing: 0) {
+            #if os(macOS)
+            // Panel chrome belongs below the window toolbar, not in its button row.
+            HStack(spacing: 12) {
+                Button { manager.toggleChannelsSidebar() } label: {
+                    Image(systemName: "sidebar.right")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Hide Channels")
+                .help("Show or hide only the channel sidebar")
+                .keyboardShortcut("2", modifiers: [.command, .shift])
+                Text("Channels (\(manager.filteredChannels.count))")
+                    .font(.headline)
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            #endif
             // Integrated Search Bar with Generous Bottom Margin
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
@@ -67,6 +86,7 @@ public struct ChannelListView: View {
                 channelListContent
             }
         }
+        #if !os(macOS)
         .navigationTitle("Channels (\(manager.filteredChannels.count))")
         .sheet(isPresented: $showingGuideSearch) { GuideSearchView(manager: manager) }
         .toolbar {
@@ -77,19 +97,11 @@ public struct ChannelListView: View {
                         .keyboardShortcut("g", modifiers: [.command, .shift])
                 }
             }
-            #if os(macOS)
-            ToolbarItem(placement: .navigation) {
-                Button { manager.toggleChannelsSidebar() } label: {
-                    Label("Hide Channels", systemImage: "sidebar.right")
-                }
-                .help("Show or hide only the channel sidebar")
-                .keyboardShortcut("2", modifiers: [.command, .shift])
-            }
-            #endif
             ToolbarItemGroup(placement: .automatic) {
                 DownloadHeaderControls(manager: manager, downloads: manager.downloads)
             }
         }
+        #endif
     }
     
     // MARK: - Subviews
