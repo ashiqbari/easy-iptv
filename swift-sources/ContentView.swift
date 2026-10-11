@@ -91,10 +91,9 @@ public struct ContentView: View {
 
     public var body: some View {
         ZStack {
-            // Exclude underlying controls from the native focus loop without unmounting playback.
+            // Disable controls, not native split-view hit testing, which drops the titlebar inset.
             libraryContent
                 .disabled(manager.showingDownloads)
-                .allowsHitTesting(!manager.showingDownloads)
                 .accessibilityHidden(manager.showingDownloads)
             if manager.showingDownloads {
                 DownloadsDialog(manager: manager, downloads: manager.downloads)

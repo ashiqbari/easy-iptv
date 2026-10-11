@@ -30,6 +30,44 @@ final class SidebarLayoutTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testDownloadsDialogDoesNotMoveSidebarContentIntoTitlebar() async throws {
+        let manager = manager()
+        let hosting = NSHostingView(rootView: ContentView(manager: manager))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820),
+                              styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.toolbarStyle = .unifiedCompact
+        window.contentView = hosting
+        defer { manager.stop(); window.close() }
+
+        func searchFields(_ view: NSView) -> [NSTextField] {
+            if let field = view as? NSTextField, field.placeholderString?.hasPrefix("Search") == true { return [field] }
+            return view.subviews.flatMap { searchFields($0) }
+        }
+        func settle() async throws {
+            for _ in 0..<10 {
+                hosting.layoutSubtreeIfNeeded()
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+        try await settle()
+        let original = Dictionary(uniqueKeysWithValues: searchFields(hosting).map {
+            ($0.placeholderString!, $0.convert($0.bounds, to: hosting))
+        })
+        XCTAssertEqual(original.count, 2)
+        for showing in [true, false, true, false] {
+            manager.showingDownloads = showing
+            try await settle()
+            let fields = searchFields(hosting)
+            XCTAssertEqual(fields.count, original.count)
+            for field in fields {
+                let expected = try XCTUnwrap(original[field.placeholderString!])
+                let current = field.convert(field.bounds, to: hosting)
+                XCTAssertEqual(current.minY, expected.minY, accuracy: 1, "Opening Downloads must preserve the titlebar inset")
+            }
+        }
+    }
+
     func testBottomControlsUseMultipleRowsInsteadOfScrollingWhenNarrow() {
         for type in [M3UItem.ContentType.movie, .series] {
             let manager = manager()
