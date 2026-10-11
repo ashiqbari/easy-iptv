@@ -187,6 +187,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 disableDisplaySleepPrevention()
             }
             #endif
+            if oldValue != isPlaying { notePlayerActivity() }
         }
     }
     
@@ -240,7 +241,14 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var videoGravity: AVLayerVideoGravity = .resizeAspect
     
     /// Indicates whether the active video playback view is expanded to fullscreen.
-    @Published public var isFullscreen: Bool = false
+    @Published public var isFullscreen: Bool = false {
+        didSet {
+            if oldValue != isFullscreen {
+                cancelControlsAutoHide()
+                if isFullscreen { scheduleControlsAutoHide() }
+            }
+        }
+    }
     
     /// Current playback progress in seconds for VOD (MP4 movies and TV shows).
     @Published public var currentTime: Double = 0.0 {
@@ -330,6 +338,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var showingEPGSheet: Bool = false
     
     private var controlsTimer: Task<Void, Never>? = nil
+    private var controlsInteractionHolds = Set<String>()
+    var pointerInsidePlayer = false
+    private(set) var playbackCursorHidden = false
     private var timeObserverToken: Any? = nil
     
     // MARK: - Playback Properties
@@ -428,6 +439,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         backgroundLibraryTask?.cancel()
         seriesLoadTask?.cancel()
         controlsTimer?.cancel()
+        #if os(macOS)
+        if playbackCursorHidden { NSCursor.setHiddenUntilMouseMoves(false) }
+        #endif
         resumeTimeoutTask?.cancel()
         libraryPersistence.invalidatePendingWrites()
         cleanupPlayer?.pause()
@@ -946,6 +960,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     /// Saves the actual engine clock before destroying its item and observers.
     private func tearDownPlayback(nextItem: M3UItem? = nil) {
+        if nextItem == nil { controlsInteractionHolds.removeAll() }
+        cancelControlsAutoHide()
         saveProgress(force: true)
         wantsPlayback = false
         pendingResumePosition = nil
@@ -1214,6 +1230,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Toggles visibility of the video player HUD overlay with auto-hide timer.
     public func toggleVideoControls() {
+        if isFullscreen { notePlayerActivity(); return }
         showVideoControls.toggle()
         if showVideoControls {
             scheduleControlsAutoHide()
@@ -1222,17 +1239,54 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         }
     }
     
-    /// Schedules auto-hide of controls after 4 seconds of inactivity.
+    var controlsAutoHideBlocked: Bool {
+        !controlsInteractionHolds.isEmpty || subtitles.showingMenu || showingEpisodesDrawer || isSeeking
+            || showingDownloads || showingEPGSheet || showingPlaylistSheet || showingAboutSheet
+            || showingResumeChoice || isViewingMovieDetails || isViewingSeriesDetails || errorMessage != nil
+    }
+
+    func setControlsInteraction(_ region: String, active: Bool) {
+        let changed = active ? controlsInteractionHolds.insert(region).inserted : controlsInteractionHolds.remove(region) != nil
+        guard changed else { return }
+        notePlayerActivity()
+    }
+
+    func notePlayerActivity() {
+        cancelControlsAutoHide()
+        scheduleControlsAutoHide()
+    }
+
+    private func setPlaybackCursorHidden(_ hidden: Bool) {
+        guard playbackCursorHidden != hidden else { return }
+        playbackCursorHidden = hidden
+        #if os(macOS)
+        NSCursor.setHiddenUntilMouseMoves(hidden)
+        #endif
+    }
+
+    func hideControlsIfIdle() {
+        guard isPlaying, currentChannel != nil, !controlsAutoHideBlocked else { return }
+        #if os(macOS)
+        guard !isFullscreen || pointerInsidePlayer,
+              NSApp?.modalWindow == nil, NSApp?.windows.contains(where: { $0.attachedSheet != nil }) != true else { return }
+        #endif
+        withAnimation(.easeInOut(duration: 0.25)) { showVideoControls = false }
+        setPlaybackCursorHidden(isFullscreen)
+    }
+
+    /// Uses the same inactivity deadline for the fullscreen cursor and HUD.
     public func scheduleControlsAutoHide() {
         controlsTimer?.cancel()
-        guard !subtitles.showingMenu else { return }
+        controlsTimer = nil
+        guard isPlaying, currentChannel != nil, !controlsAutoHideBlocked else { return }
+        #if os(macOS)
+        guard !isFullscreen || pointerInsidePlayer else { return }
+        #endif
+        let delay: UInt64 = isFullscreen ? 2_500_000_000 : 4_000_000_000
         controlsTimer = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 4_000_000_000)
-            if !Task.isCancelled, self?.subtitles.showingMenu != true {
-                withAnimation {
-                    self?.showVideoControls = false
-                }
-            }
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            self?.hideControlsIfIdle()
         }
     }
 
@@ -1240,6 +1294,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func cancelControlsAutoHide() {
         controlsTimer?.cancel()
         controlsTimer = nil
+        if !showVideoControls { showVideoControls = true }
+        setPlaybackCursorHidden(false)
     }
 
     private func subtitleProvider(for item: M3UItem) -> () async throws -> [SubtitleSource] {

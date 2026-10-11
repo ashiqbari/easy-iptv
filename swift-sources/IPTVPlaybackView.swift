@@ -9,6 +9,131 @@ import SwiftUI
 import AVFoundation
 import QuartzCore
 
+#if os(macOS)
+/// Observes input without replacing the AVPlayer/VLC surface or swallowing its events.
+struct PlaybackActivityTracking: NSViewRepresentable {
+    let manager: IPTVPlayerManager
+    func makeNSView(context: Context) -> PlaybackActivityNSView { PlaybackActivityNSView(manager: manager) }
+    func updateNSView(_ view: PlaybackActivityNSView, context: Context) { }
+    static func dismantleNSView(_ view: PlaybackActivityNSView, coordinator: ()) { view.stopTracking() }
+}
+
+final class PlaybackActivityNSView: NSView {
+    private weak var manager: IPTVPlayerManager?
+    private weak var trackedWindow: NSWindow?
+    private var previousMouseMovedEvents = false
+    private var monitor: Any?
+    private var observers: [NSObjectProtocol] = []
+    private var area: NSTrackingArea?
+    private var trackedMenus = Set<String>()
+
+    init(manager: IPTVPlayerManager) { self.manager = manager; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopTracking()
+        guard let window else { return }
+        trackedWindow = window
+        previousMouseMovedEvents = window.acceptsMouseMovedEvents
+        window.acceptsMouseMovedEvents = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown,
+            .otherMouseDown, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel, .keyDown, .flagsChanged]) { [weak self] event in
+            self?.handle(event)
+            return event
+        }
+        for name in [NSWindow.didResignKeyNotification, NSApplication.didResignActiveNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: name == NSWindow.didResignKeyNotification ? window : nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.leavePlayer() }
+            })
+        }
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updatePointer() }
+        })
+        for name in [NSMenu.didBeginTrackingNotification, NSMenu.didEndTrackingNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    guard let self, let menu = notification.object as? NSMenu else { return }
+                    let key = "menu-\(ObjectIdentifier(menu))"
+                    if name == NSMenu.didBeginTrackingNotification {
+                        guard self.manager?.isFullscreen == true else { return }
+                        self.trackedMenus.insert(key)
+                        self.manager?.setControlsInteraction(key, active: true)
+                    } else if self.trackedMenus.remove(key) != nil {
+                        self.manager?.setControlsInteraction(key, active: false)
+                    }
+                }
+            })
+        }
+        updatePointerAfterLayout()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        let next = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .mouseEnteredAndExited, .activeInKeyWindow], owner: self, userInfo: nil)
+        area = next
+        addTrackingArea(next)
+    }
+    override func mouseEntered(with event: NSEvent) { updatePointer() }
+    override func mouseExited(with event: NSEvent) { leavePlayer() }
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = frame.size != newSize
+        super.setFrameSize(newSize)
+        if changed { updatePointerAfterLayout() }
+    }
+
+    private func updatePointerAfterLayout() {
+        // Native layout runs inside SwiftUI updates; publish activity on the next turn.
+        Task { @MainActor [weak self] in
+            guard self?.trackedWindow != nil else { return }
+            self?.updatePointer()
+        }
+    }
+
+    func handle(_ event: NSEvent) {
+        guard let manager, event.window === window else { return }
+        if event.type == .keyDown || event.type == .flagsChanged {
+            manager.notePlayerActivity()
+        } else if bounds.contains(convert(event.locationInWindow, from: nil)) {
+            manager.pointerInsidePlayer = true
+            manager.notePlayerActivity()
+        } else { leavePlayer() }
+    }
+
+    private func updatePointer() {
+        guard let window, let manager, !bounds.isEmpty else { return }
+        manager.pointerInsidePlayer = bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        if manager.pointerInsidePlayer { manager.notePlayerActivity() }
+        else { manager.cancelControlsAutoHide() }
+    }
+    private func leavePlayer() {
+        manager?.pointerInsidePlayer = false
+        manager?.cancelControlsAutoHide()
+    }
+
+    func stopTracking() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers = []
+        let wasTracking = trackedWindow != nil
+        trackedWindow?.acceptsMouseMovedEvents = previousMouseMovedEvents
+        trackedWindow = nil
+        let menus = trackedMenus
+        trackedMenus = []
+        guard wasTracking else { return }
+        Task { @MainActor [weak self, weak manager] in
+            for key in menus { manager?.setControlsInteraction(key, active: false) }
+            guard self?.trackedWindow == nil else { return }
+            manager?.pointerInsidePlayer = false
+            manager?.cancelControlsAutoHide()
+        }
+    }
+}
+#endif
+
 private struct EpisodePositions: PreferenceKey {
     static var defaultValue: [Int: CGFloat] = [:]
     static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
@@ -17,6 +142,7 @@ private struct EpisodePositions: PreferenceKey {
 }
 #if os(macOS)
 import VLC
+import AppKit
 #endif
 
 /// High-performance video player view wrapping hardware-accelerated AVPlayerLayer
@@ -82,9 +208,14 @@ public struct IPTVPlaybackView: View {
             manager.playerViewAppeared(visibilityID)
             manager.scheduleControlsAutoHide()
         }
-        .onDisappear { manager.playerViewDisappeared(visibilityID) }
+        .onDisappear {
+            manager.cancelControlsAutoHide()
+            manager.playerViewDisappeared(visibilityID)
+        }
         // macOS keyboard shortcuts (macOS 15+)
         #if os(macOS)
+        .onChange(of: manager.controlsAutoHideBlocked) { _, _ in manager.notePlayerActivity() }
+        .background { PlaybackActivityTracking(manager: manager) }
         .background {
             HStack(spacing: 0) {
                 Button("") { manager.togglePlayPause() }
@@ -99,6 +230,8 @@ public struct IPTVPlaybackView: View {
             .opacity(0)
             .allowsHitTesting(false)
         }
+        #else
+        .onChange(of: manager.controlsAutoHideBlocked) { _ in manager.notePlayerActivity() }
         #endif
     }
 
@@ -153,17 +286,20 @@ public struct IPTVPlaybackView: View {
     private var controlsOverlay: some View {
         VStack {
             // Top Navigation HUD Bar
-            topBar
+            topBar.onHover { manager.setControlsInteraction("topBar", active: $0) }
+                .onDisappear { manager.setControlsInteraction("topBar", active: false) }
             
             Spacer()
             
             // Center Play / Pause & Skip HUD
-            centerControls
+            centerControls.onHover { manager.setControlsInteraction("centerControls", active: $0) }
+                .onDisappear { manager.setControlsInteraction("centerControls", active: false) }
             
             Spacer()
             
             // Bottom Action HUD Bar
-            bottomBar
+            bottomBar.onHover { manager.setControlsInteraction("bottomBar", active: $0) }
+                .onDisappear { manager.setControlsInteraction("bottomBar", active: false) }
         }
         .padding()
         .background(
