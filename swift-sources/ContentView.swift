@@ -137,11 +137,13 @@ public struct ContentView: View {
         }
         #if os(macOS)
         .sheet(isPresented: $showingGuideSearch) { GuideSearchView(manager: manager) }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { _ in
-            manager.updateFullscreenState(true)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { notification in
+            guard let window = notification.object as? NSWindow else { return }
+            manager.updateFullscreenState(true, window: window)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { _ in
-            manager.updateFullscreenState(false)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { notification in
+            guard let window = notification.object as? NSWindow else { return }
+            manager.updateFullscreenState(false, window: window)
         }
         // AppKit avoids stale SwiftUI colors when returning to System appearance.
         .onChange(of: appearance, initial: true) { _, preference in

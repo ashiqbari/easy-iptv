@@ -1213,12 +1213,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     #if os(macOS)
     /// Keeps SwiftUI's fullscreen state aligned with the native window transition.
-    public func updateFullscreenState(_ isFullscreen: Bool) {
+    public func updateFullscreenState(_ isFullscreen: Bool, window: NSWindow? = nil) {
         self.isFullscreen = isFullscreen
         columnVisibility = isFullscreen ? .detailOnly : .all
-        guard let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow else { return }
+        guard let window = window ?? NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow else { return }
         window.toolbar?.isVisible = !isFullscreen
-        window.titleVisibility = isFullscreen ? .hidden : .visible
+        window.titleVisibility = .hidden
     }
     #endif
 

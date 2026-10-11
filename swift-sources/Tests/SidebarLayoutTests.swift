@@ -210,6 +210,28 @@ final class SidebarLayoutTests: XCTestCase {
         XCTAssertFalse(manager.showsChannelsSidebar)
     }
 
+    func testFullscreenExitKeepsTitleHiddenAndRestoresToolbar() {
+        _ = NSApplication.shared
+        let manager = manager()
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled, .miniaturizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.title = "EasyIPTV"
+        window.titleVisibility = .hidden
+        window.toolbar = NSToolbar(identifier: "fullscreen-title-test")
+        defer { manager.stop(); window.close() }
+        manager.updateFullscreenState(true, window: window)
+        XCTAssertEqual(window.titleVisibility, .hidden)
+        XCTAssertEqual(window.toolbar?.isVisible, false)
+        manager.updateFullscreenState(false, window: window)
+        XCTAssertEqual(window.titleVisibility, .hidden)
+        XCTAssertEqual(window.toolbar?.isVisible, true)
+        window.miniaturize(nil)
+        window.deminiaturize(nil)
+        XCTAssertEqual(window.titleVisibility, .hidden)
+        XCTAssertEqual(window.toolbar?.isVisible, true)
+    }
+
     func testMissingAnchorCannotCoverNavigationAndNormalBoundsStayScoped() {
         let size = CGSize(width: 1320, height: 820)
         XCTAssertEqual(LibraryPaneLayout.playbackFrame(fullscreen: false, containerSize: size, detailBounds: nil), .zero)
