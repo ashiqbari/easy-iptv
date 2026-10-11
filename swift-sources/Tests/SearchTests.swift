@@ -9,7 +9,7 @@ import VLC
 @MainActor
 final class SearchTests: XCTestCase {
     func testTopShortcutsDoNotIncludeProviderCategories() {
-        XCTAssertEqual(ChannelListView.categoryShortcuts, ["All", "Favorites"])
+        XCTAssertEqual(ChannelListView.categoryShortcuts, ["All", "Favorites", "Recently Watched"])
     }
 
     func testDownloadsDialogPreservesCategorySearchAndPlayer() async throws {

@@ -332,6 +332,19 @@ public struct ContentView: View {
                                 .foregroundColor(.yellow)
                         }
                     }
+                    categoryRow("Recently Watched") {
+                        Label {
+                            HStack {
+                                Text("Recently Watched").lineLimit(1)
+                                Spacer(minLength: 8)
+                                Text("\(manager.recentlyWatchedChannels.count)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "clock.arrow.circlepath").foregroundStyle(.blue)
+                        }
+                    }
                 }
                 
                 Section("Categories") {

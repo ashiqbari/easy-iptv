@@ -15,7 +15,7 @@ public struct ChannelListView: View {
     #if !os(macOS)
     @State private var showingGuideSearch = false
     #endif
-    static let categoryShortcuts = ["All", "Favorites"]
+    static let categoryShortcuts = ["All", "Favorites", "Recently Watched"]
     
     public init(manager: IPTVPlayerManager) {
         self.manager = manager
@@ -74,6 +74,17 @@ public struct ChannelListView: View {
             categoryFilterBar
                 .padding(.bottom, 10)
                 .background(categoryBarBackground)
+
+            if manager.selectedCategory == "Recently Watched", !manager.recentlyWatchedChannels.isEmpty {
+                HStack {
+                    Spacer()
+                    Button("Clear History") { manager.clearRecentlyWatched() }
+                        .buttonStyle(.borderless)
+                        .help("Clear recently watched history for \(manager.selectedSection.rawValue)")
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+            }
             
             Divider()
             
@@ -182,12 +193,27 @@ public struct ChannelListView: View {
     }
 
     private func channelRow(_ channel: M3UItem) -> some View {
-        ChannelRowView(
+        let isRecent = manager.selectedCategory == "Recently Watched"
+        let record = isRecent ? manager.recentlyWatchedRecord(for: channel) : nil
+        let episodeLabel = record.flatMap { record -> String? in
+            guard let season = record.season, let episode = record.episode else { return nil }
+            return "Last watched: S\(season) · E\(episode)"
+        }
+        return ChannelRowView(
             channel: channel,
             isPlaying: manager.currentChannel?.id == channel.id,
-            onSelect: { manager.playChannel(channel) },
-            onToggleFavorite: { manager.toggleFavorite(channel) }
+            onSelect: {
+                if isRecent { manager.playRecentlyWatched(channel) }
+                else { manager.playChannel(channel) }
+            },
+            onToggleFavorite: { manager.toggleFavorite(channel) },
+            subtitle: episodeLabel
         )
+        .contextMenu {
+            if isRecent {
+                Button("Remove from Recently Watched") { manager.removeRecentlyWatched(channel) }
+            }
+        }
     }
     
     /// Loading indicator
@@ -209,7 +235,7 @@ public struct ChannelListView: View {
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
             
-            Text("No Channels Found")
+            Text(manager.selectedCategory == "Recently Watched" ? "Nothing Recently Watched" : "No Channels Found")
                 .font(.headline)
             
             if !manager.searchText.isEmpty {
@@ -221,6 +247,12 @@ public struct ChannelListView: View {
                 
                 Button("Clear Search", action: clearSearch)
                 .buttonStyle(.borderedProminent)
+            } else if manager.selectedCategory == "Recently Watched" {
+                Text("\(manager.selectedSection.rawValue) you play will appear here, newest first.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
             } else if manager.selectedCategory == "Favorites" || manager.selectedCategory == "★ Favorites" {
                 Text("You haven't added any favorite channels yet. Tap the star icon on any channel to add it here.")
                     .font(.caption)
@@ -260,6 +292,7 @@ public struct ChannelRowView: View {
     let isPlaying: Bool
     let onSelect: () -> Void
     let onToggleFavorite: () -> Void
+    var subtitle: String? = nil
     
     public var body: some View {
         Button(action: onSelect) {
@@ -285,7 +318,7 @@ public struct ChannelRowView: View {
                     }
                     
                     HStack(spacing: 6) {
-                        Text(channel.displayGroup)
+                        Text(subtitle ?? channel.displayGroup)
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .lineLimit(1)

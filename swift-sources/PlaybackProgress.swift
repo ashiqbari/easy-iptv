@@ -72,3 +72,57 @@ struct PlaybackResumeRequest: Identifiable {
     let position: Double
     let useVLC: Bool
 }
+
+struct RecentlyWatched: Codable, Equatable {
+    let libraryKey: String
+    let episodeKey: String
+    let contentType: M3UItem.ContentType
+    let season: Int?
+    let episode: Int?
+}
+
+/// Resolve hashed identities against the current library instead of saving stream credentials.
+@MainActor
+final class RecentlyWatchedStore {
+    private(set) var records: [RecentlyWatched]
+    private let defaults: UserDefaults
+    private let storageKey = "com.iptvplayer.recentlyWatched.v1"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        records = defaults.data(forKey: storageKey)
+            .flatMap { try? JSONDecoder().decode([RecentlyWatched].self, from: $0) } ?? []
+    }
+
+    func record(_ item: M3UItem, series: M3UItem? = nil) {
+        // shortcut: M3U episodes without a show identity stay separate; group when the playlist supplies one.
+        let libraryItem = item.contentType == .series ? (series ?? item) : item
+        let key = PlaybackProgressStore.key(for: libraryItem)
+        records.removeAll { $0.libraryKey == key }
+        records.insert(RecentlyWatched(libraryKey: key, episodeKey: PlaybackProgressStore.key(for: item),
+                                      contentType: item.contentType, season: item.seasonNumber,
+                                      episode: item.episodeNumber), at: 0)
+        var count = 0
+        records.removeAll {
+            guard $0.contentType == item.contentType else { return false }
+            count += 1
+            return count > 30
+        }
+        persist()
+    }
+
+    func remove(_ item: M3UItem) {
+        let key = PlaybackProgressStore.key(for: item)
+        records.removeAll { $0.libraryKey == key }
+        persist()
+    }
+
+    func clear(_ section: M3UItem.ContentType) {
+        records.removeAll { $0.contentType == section }
+        persist()
+    }
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(records) { defaults.set(data, forKey: storageKey) }
+    }
+}

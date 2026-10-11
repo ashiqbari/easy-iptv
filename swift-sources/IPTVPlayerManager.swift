@@ -73,6 +73,9 @@ private final class DisplaySleepManager: @unchecked Sendable {
 public final class IPTVPlayerManager: NSObject, ObservableObject {
     let subtitles = SubtitleController()
     let progressStore: PlaybackProgressStore
+    let recentlyWatchedStore: RecentlyWatchedStore
+    private var libraryItemsByKey: [String: M3UItem] = [:]
+    private var recordedCurrentPlayback = false
     let downloads: DownloadManager
     @Published var showingDownloads = false
     var pendingDownload: DownloadRecord?
@@ -103,7 +106,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     // MARK: - Published State
     
     /// The full list of parsed channels from the active playlist.
-    @Published public private(set) var channels: [M3UItem] = []
+    @Published public private(set) var channels: [M3UItem] = [] {
+        didSet {
+            libraryItemsByKey = [:]
+            for item in channels { libraryItemsByKey[PlaybackProgressStore.key(for: item)] = item }
+        }
+    }
     
     /// Precomputed dynamic list of categories for the selected section.
     @Published public private(set) var categories: [String] = ["All", "★ Favorites"]
@@ -125,7 +133,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         didSet {
             if oldValue != selectedSection {
                 stop()
-                selectedCategory = "All"
+                if selectedCategory != "Recently Watched" { selectedCategory = "All" }
                 categorySearchText = ""
                 reindexCategoriesAndChannels()
                 if selectedSection == .series {
@@ -160,7 +168,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     var filteredCategories: [String] {
         let query = categorySearchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return categories.filter {
-            $0 != "All" && $0 != "Favorites" && $0 != "★ Favorites"
+            !ChannelListView.categoryShortcuts.contains($0) && $0 != "★ Favorites"
                 && (query.isEmpty || $0.localizedStandardContains(query))
         }
     }
@@ -402,6 +410,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public override init() {
         downloads = DownloadManager.shared
         progressStore = PlaybackProgressStore()
+        recentlyWatchedStore = RecentlyWatchedStore()
         storageDefaults = .standard
         libraryLoader = LibraryLoader()
         libraryPersistence = LibraryPersistence(url: Self.defaultCacheURL, defaults: .standard)
@@ -416,6 +425,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         self.downloads = downloads ?? DownloadManager(root: FileManager.default.temporaryDirectory.appendingPathComponent("EasyIPTVDownloadsTests-\(UUID())"),
             configuration: .ephemeral, monitorNetwork: false, subtitleFetch: { $0.subtitleSources ?? [] })
         progressStore = PlaybackProgressStore(defaults: progressDefaults)
+        recentlyWatchedStore = RecentlyWatchedStore(defaults: progressDefaults)
         storageDefaults = progressDefaults
         self.libraryLoader = libraryLoader
         libraryPersistence = LibraryPersistence(url: cacheURL ?? FileManager.default.temporaryDirectory
@@ -480,7 +490,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         }
         
         let sortedGroups = groups.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-        self.categories = ["All", "Favorites"] + sortedGroups
+        self.categories = ChannelListView.categoryShortcuts + sortedGroups
         self.categoryCounts = counts
         self.favoritesCount = favCount
         self.sectionTotalCount = secTotal
@@ -493,7 +503,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         var result = channels.filter { $0.contentType == selectedSection }
         
         // 1. Category Filtering
-        if selectedCategory == "Favorites" || selectedCategory == "★ Favorites" {
+        if selectedCategory == "Recently Watched" {
+            result = recentlyWatchedChannels
+        } else if selectedCategory == "Favorites" || selectedCategory == "★ Favorites" {
             result = result.filter { favoriteStreamURLs.contains($0.streamURL.absoluteString) }
         } else if selectedCategory != "All" {
             result = result.filter { $0.displayGroup == selectedCategory }
@@ -662,6 +674,45 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     // MARK: - Playback Control
+
+    var recentlyWatchedChannels: [M3UItem] {
+        recentlyWatchedStore.records.filter { $0.contentType == selectedSection }
+            .compactMap { libraryItemsByKey[$0.libraryKey] }
+    }
+
+    func recentlyWatchedRecord(for item: M3UItem) -> RecentlyWatched? {
+        let key = PlaybackProgressStore.key(for: item)
+        return recentlyWatchedStore.records.first { $0.libraryKey == key }
+    }
+
+    func removeRecentlyWatched(_ item: M3UItem) {
+        recentlyWatchedStore.remove(item)
+        updateFilteredChannelsOnly()
+    }
+
+    func clearRecentlyWatched() {
+        recentlyWatchedStore.clear(selectedSection)
+        updateFilteredChannelsOnly()
+    }
+
+    func playRecentlyWatched(_ item: M3UItem) {
+        guard let record = recentlyWatchedRecord(for: item) else { return }
+        if item.contentType == .series {
+            fetchAndShowSeries(item, recentEpisodeKey: record.episodeKey)
+        } else if item.contentType == .movie {
+            stop()
+            continueWatching(item)
+        } else {
+            playChannel(item)
+        }
+    }
+
+    func recordPlaybackStarted() {
+        guard wantsPlayback, isPlaying, !recordedCurrentPlayback, let item = currentChannel else { return }
+        recordedCurrentPlayback = true
+        recentlyWatchedStore.record(item, series: seriesOverviewItem)
+        updateFilteredChannelsOnly()
+    }
     
     /// Opens movie/series details, or begins playback for a live channel.
     /// - Parameter item: The target channel or show.
@@ -755,6 +806,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     private func playDirectStream(_ item: M3UItem, useVLC: Bool, position: Double? = nil) {
         tearDownPlayback(nextItem: item)
+        recordedCurrentPlayback = false
         resumeRequest = nil
         pendingResumePosition = position.flatMap { $0 > 0 ? $0 : nil }
         wantsPlayback = true
@@ -771,6 +823,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         movieOverviewItem = item.contentType == .movie ? item : nil
         self.useVLCPlayback = false
         if item.contentType != .series {
+            seriesOverviewItem = nil
             self.seriesEpisodes = []
             self.showingEpisodesDrawer = false
         }
@@ -879,7 +932,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Queries the Xtream server for a TV show's seasons and episodes,
     /// stops playback, and presents the rich Series Overview & Episodes grid first.
-    public func fetchAndShowSeries(_ item: M3UItem) {
+    public func fetchAndShowSeries(_ item: M3UItem, recentEpisodeKey: String? = nil) {
         movieOverviewItem = nil
         isViewingMovieDetails = false
         seriesLoadTask?.cancel()
@@ -902,6 +955,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             seriesEpisodes = episodes.map(\.item).sorted { ($0.seasonNumber ?? 0, $0.episodeNumber ?? 0) < ($1.seasonNumber ?? 0, $1.episodeNumber ?? 0) }
             seriesDetails = episodes.first?.details
             isLoadingEpisodes = false
+            resumeRecentEpisode(recentEpisodeKey)
             return
         }
         let loadDetails = libraryLoader.seriesDetails
@@ -909,13 +963,16 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             do {
                 let result = try await loadDetails(item)
                 guard let self, !Task.isCancelled, self.seriesGeneration == generation,
-                      self.seriesOverviewItem?.id == item.id else { return }
+                      self.seriesOverviewItem?.id == item.id, self.isViewingSeriesDetails,
+                      self.currentChannel?.id == item.id else { return }
                 self.seriesEpisodes = result.episodes
                 self.seriesDetails = result.details
                 self.isLoadingEpisodes = false
+                self.resumeRecentEpisode(recentEpisodeKey)
             } catch {
                 guard let self, !Task.isCancelled, self.seriesGeneration == generation,
-                      self.seriesOverviewItem?.id == item.id else { return }
+                      self.seriesOverviewItem?.id == item.id, self.isViewingSeriesDetails,
+                      self.currentChannel?.id == item.id else { return }
                 self.isLoadingEpisodes = false
                 self.seriesDetailsFailed = true
             }
@@ -926,6 +983,15 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     public func fetchAndPlaySeries(_ item: M3UItem) {
         fetchAndShowSeries(item)
+    }
+
+    private func resumeRecentEpisode(_ key: String?) {
+        guard let key else { return }
+        guard let episode = seriesEpisodes.first(where: { PlaybackProgressStore.key(for: $0) == key }) else {
+            errorMessage = "The last watched episode is unavailable. Choose another episode from this show."
+            return
+        }
+        continueWatching(episode)
     }
 
     /// Every route back to the episode browser uses the same engine-independent exit.
@@ -1423,6 +1489,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                           pl.currentItem === playerItem else { return }
                     self.isPlaying = self.wantsPlayback && pl.timeControlStatus == .playing
                     self.isBuffering = self.wantsPlayback && pl.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    if self.isPlaying { self.recordPlaybackStarted() }
                 }
             }
         }
@@ -1558,6 +1625,7 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
                 self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
             } else if state == .playing {
                 self.applyPendingVLCResume(player)
+                self.recordPlaybackStarted()
                 if !self.wantsPlayback { player.pause() }
                 self.errorMessage = nil
                 self.subtitles.nativePlayerDidStart()
