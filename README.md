@@ -87,8 +87,11 @@ whole-library download settings aren't included.
 <details>
 <summary><strong>Resume, progress, and leaving the player</strong></summary>
 
-Leaving playback (including **Back to Series Overview**, **All Episodes**, switching
-items/sections, or closing the player) saves progress and stops both playback engines.
+Switching sections or categories keeps the current stream playing. Movie and series
+details open over the mounted player while playback continues; **Back to Player**
+returns to it. Pressing **Play** on a new item replaces the current stream.
+Leaving playback through **Back to Series Overview**, **All Episodes**, or closing
+the player saves progress and stops both playback engines.
 Progress is also saved every five seconds while playing. Hide the macOS app or
 background the iOS app to pause; resume manually when returning. Movies and episodes
 offer **Resume from mm:ss** or **Start over**. Episodes have progress indicators and

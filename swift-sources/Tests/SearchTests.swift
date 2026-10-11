@@ -265,6 +265,7 @@ final class SearchTests: XCTestCase {
         defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
         manager.selectedSection = .movie
         await manager.loadPlaylist(from: "https://fixture.invalid/list.m3u")
+        manager.playDirectStream(items[0])
         manager.player?.replaceCurrentItem(with: nil)
         manager.selectedCategory = "Even"
         let playing = try XCTUnwrap(manager.currentChannel?.id)

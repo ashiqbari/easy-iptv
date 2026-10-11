@@ -6,6 +6,51 @@ import AppKit
 @testable import EasyIPTV
 
 final class SeriesDetailsTests: XCTestCase {
+    @MainActor func testBrowsingAnotherShowKeepsPlayingEpisodeContextAndHighlight() async throws {
+        let suite = "series-browsing-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let media = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: media) }
+        let firstShow = show("1"), secondShow = show("2")
+        let firstEpisode = M3UItem(name: "First episode", streamURL: media, contentType: .series)
+        let secondEpisode = M3UItem(name: "Second episode", streamURL: media, contentType: .series)
+        var loader = LibraryLoader()
+        loader.seriesDetails = { item in SeriesDetails(details: nil, episodes: [item.id == firstShow.id ? firstEpisode : secondEpisode]) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer { manager.stop() }
+        manager.fetchAndShowSeries(firstShow)
+        try await waitUntil { !manager.isLoadingEpisodes }
+        manager.playDirectStream(firstEpisode)
+        let player = try XCTUnwrap(manager.player)
+        let item = try XCTUnwrap(player.currentItem)
+        XCTAssertTrue(manager.isCurrentPlayback(firstShow))
+        manager.fetchAndShowSeries(secondShow)
+        try await waitUntil { !manager.isLoadingEpisodes }
+        XCTAssertTrue(manager.player === player)
+        XCTAssertTrue(player.currentItem === item)
+        XCTAssertEqual(manager.currentChannel?.id, firstEpisode.id)
+        XCTAssertEqual(manager.seriesDetailsItem?.id, secondShow.id)
+        XCTAssertTrue(manager.isCurrentPlayback(firstShow))
+        XCTAssertFalse(manager.isCurrentPlayback(secondShow))
+        #if os(macOS)
+        manager.playCurrentStreamWithVLC()
+        XCTAssertTrue(manager.isViewingSeriesDetails)
+        XCTAssertEqual(manager.seriesDetailsItem?.id, secondShow.id)
+        XCTAssertTrue(manager.isCurrentPlayback(firstShow))
+        #endif
+        manager.dismissDetails()
+        XCTAssertEqual(manager.seriesEpisodes.map(\.id), [firstEpisode.id])
+        XCTAssertEqual(manager.downloadSeriesItem?.id, firstShow.id)
+        manager.fetchAndShowSeries(secondShow)
+        try await waitUntil { !manager.isLoadingEpisodes }
+        manager.playDirectStream(secondEpisode)
+        XCTAssertNil(player.currentItem)
+        XCTAssertEqual(manager.currentChannel?.id, secondEpisode.id)
+        XCTAssertTrue(manager.isCurrentPlayback(secondShow))
+        XCTAssertFalse(manager.isCurrentPlayback(firstShow))
+    }
+
     @MainActor func testEpisodeArrowsUseVisiblePositionInBothLayoutsAndClampAtBounds() {
         let defaults = UserDefaults(suiteName: "episode-navigation-\(UUID())")!
         let manager = IPTVPlayerManager(progressDefaults: defaults)

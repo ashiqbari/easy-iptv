@@ -161,12 +161,7 @@ public struct IPTVPlaybackView: View {
             // Background deep canvas
             Color.black.ignoresSafeArea()
             
-            if manager.isViewingMovieDetails, let movie = manager.movieOverviewItem {
-                MovieDetailsView(item: movie, manager: manager)
-            } else if manager.currentChannel?.contentType == .series && manager.isViewingSeriesDetails {
-                // TV Series Overview & Seasons/Episodes Hero Page (Screenshot 3 Reference UI)
-                seriesHeroView
-            } else {
+            Group {
 #if os(macOS)
                 if manager.useVLCPlayback {
                     if let player = manager.vlcPlayer {
@@ -197,6 +192,16 @@ public struct IPTVPlaybackView: View {
 #else
                 avPlaybackContent
 #endif
+            }
+            .opacity(manager.isViewingMovieDetails || manager.isViewingSeriesDetails ? 0 : 1)
+            .allowsHitTesting(!manager.isViewingMovieDetails && !manager.isViewingSeriesDetails)
+            .accessibilityHidden(manager.isViewingMovieDetails || manager.isViewingSeriesDetails)
+
+            if manager.isViewingMovieDetails, let movie = manager.movieOverviewItem {
+                MovieDetailsView(item: movie, manager: manager)
+                    .background(Color.black)
+            } else if manager.isViewingSeriesDetails {
+                seriesHeroView.background(Color.black)
             }
         }
         .sheet(isPresented: $manager.showingEPGSheet) {
@@ -841,7 +846,11 @@ public struct IPTVPlaybackView: View {
                 .ignoresSafeArea()
                 
                 VStack(alignment: .leading, spacing: 24) {
-                    if let channel = manager.currentChannel {
+                    Button { manager.dismissDetails() } label: {
+                        Label(manager.currentChannel == nil ? "Back to TV Shows" : "Back to Player", systemImage: "chevron.left")
+                    }
+                    .padding(.horizontal, 32)
+                    if let channel = manager.seriesDetailsItem {
                         if let backdrop = manager.seriesDetails?.backdrop {
                             AsyncImage(url: backdrop) { image in
                                 image.resizable().scaledToFill()
@@ -952,7 +961,7 @@ public struct IPTVPlaybackView: View {
                                             } label: {
                                                 VStack(alignment: .leading, spacing: 8) {
                                                     ZStack(alignment: .bottomTrailing) {
-                                                        EpisodeArtworkView(url: ep.logoURL ?? manager.currentChannel?.logoURL)
+                                                        EpisodeArtworkView(url: ep.logoURL ?? manager.seriesDetailsItem?.logoURL)
 
                                                         Text("\(index + 1)")
                                                             .font(.caption.bold())
@@ -1001,7 +1010,7 @@ public struct IPTVPlaybackView: View {
                                                     } label: {
                                                         VStack(alignment: .leading, spacing: 8) {
                                                             ZStack(alignment: .bottomTrailing) {
-                                                                EpisodeArtworkView(url: ep.logoURL ?? manager.currentChannel?.logoURL)
+                                                                EpisodeArtworkView(url: ep.logoURL ?? manager.seriesDetailsItem?.logoURL)
                                                                     .frame(width: 220, height: 124)
 
                                                                 Text("\(index + 1)")

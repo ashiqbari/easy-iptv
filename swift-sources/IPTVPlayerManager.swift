@@ -88,6 +88,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         didSet { showingResumeChoice = resumeRequest != nil }
     }
     private var seriesOverviewItem: M3UItem?
+    private var playingSeries: (item: M3UItem?, episodes: [M3UItem], details: MediaDetails?)?
+    var seriesDetailsItem: M3UItem? { seriesOverviewItem ?? currentChannel }
+    func isCurrentPlayback(_ item: M3UItem) -> Bool {
+        currentChannel?.id == item.id || (currentChannel?.contentType == .series && playingSeries?.item?.id == item.id)
+    }
     private var pendingResumePosition: Double?
     private var vlcResumeSeekIssued = false
     private var resumeTimeoutTask: Task<Void, Never>?
@@ -134,15 +139,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var selectedSection: M3UItem.ContentType = .live {
         didSet {
             if oldValue != selectedSection {
-                stop()
+                dismissDetails()
                 if selectedCategory != "Recently Watched" { selectedCategory = "All" }
                 categorySearchText = ""
                 reindexCategoriesAndChannels()
-                if selectedSection == .series {
-                    if let firstSeries = filteredChannels.first {
-                        fetchAndShowSeries(firstSeries)
-                    }
-                }
             }
         }
     }
@@ -713,7 +713,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     func recordPlaybackStarted() {
         guard wantsPlayback, isPlaying, !recordedCurrentPlayback, let item = currentChannel else { return }
         recordedCurrentPlayback = true
-        recentlyWatchedStore.record(item, series: seriesOverviewItem)
+        recentlyWatchedStore.record(item, series: playingSeries?.item)
         updateFilteredChannelsOnly()
     }
     
@@ -737,10 +737,23 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     func showMovieDetails(_ item: M3UItem) {
-        stop()
+        dismissDetails()
         movieOverviewItem = item
-        currentChannel = item
         isViewingMovieDetails = true
+    }
+
+    func dismissDetails() {
+        seriesLoadTask?.cancel()
+        seriesLoadTask = nil
+        seriesGeneration = UUID()
+        isLoadingEpisodes = false
+        isViewingMovieDetails = false
+        isViewingSeriesDetails = false
+        movieOverviewItem = currentChannel?.contentType == .movie ? currentChannel : nil
+        seriesOverviewItem = playingSeries?.item
+        seriesEpisodes = playingSeries?.episodes ?? []
+        seriesDetails = playingSeries?.details
+        seriesDetailsFailed = false
     }
 
     func playMovie(startOver: Bool = false) {
@@ -807,7 +820,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     #endif
 
-    private func playDirectStream(_ item: M3UItem, useVLC: Bool, position: Double? = nil) {
+    private func playDirectStream(_ item: M3UItem, useVLC: Bool, position: Double? = nil, preservingDetails: Bool = false) {
         tearDownPlayback(nextItem: item)
         recordedCurrentPlayback = false
         resumeRequest = nil
@@ -821,11 +834,18 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         stopVLCPlayback()
         #endif
         self.currentChannel = item
-        self.isViewingSeriesDetails = false
-        self.isViewingMovieDetails = false
-        movieOverviewItem = item.contentType == .movie ? item : nil
+        if !preservingDetails, item.contentType == .series {
+            playingSeries = (seriesOverviewItem, seriesEpisodes, seriesDetails)
+        } else if !preservingDetails {
+            playingSeries = nil
+        }
+        if !preservingDetails {
+            self.isViewingSeriesDetails = false
+            self.isViewingMovieDetails = false
+            movieOverviewItem = item.contentType == .movie ? item : nil
+        }
         self.useVLCPlayback = false
-        if item.contentType != .series {
+        if item.contentType != .series, !preservingDetails {
             seriesOverviewItem = nil
             self.seriesEpisodes = []
             self.showingEpisodesDrawer = false
@@ -876,9 +896,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #if os(macOS)
     /// Switches the selected stream to VLC's in-app playback engine.
     public func playCurrentStreamWithVLC() {
-        guard let currentChannel, !isViewingSeriesDetails, resumeRequest == nil else { return }
+        guard let currentChannel, resumeRequest == nil, player != nil || useVLCPlayback else { return }
         let position = pendingResumePosition ?? playbackPosition()
-        playDirectStream(currentChannel, useVLC: true, position: position)
+        playDirectStream(currentChannel, useVLC: true, position: position,
+                         preservingDetails: isViewingMovieDetails || isViewingSeriesDetails)
     }
 
     private func startVLCPlayback(for item: M3UItem) {
@@ -934,21 +955,16 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #endif
     
     /// Queries the Xtream server for a TV show's seasons and episodes,
-    /// stops playback, and presents the rich Series Overview & Episodes grid first.
+    /// presents the Series Overview without interrupting the playing stream.
     public func fetchAndShowSeries(_ item: M3UItem, recentEpisodeKey: String? = nil) {
         movieOverviewItem = nil
         isViewingMovieDetails = false
         seriesLoadTask?.cancel()
         seriesGeneration = UUID()
         let generation = seriesGeneration
-        tearDownPlayback()
-        resumeRequest = nil
         seriesOverviewItem = item
-        subtitles.reset(for: nil)
-        self.currentChannel = item
         self.isViewingSeriesDetails = true
         self.isSeriesGridView = true
-        self.errorMessage = nil
         self.isLoadingEpisodes = true
         self.seriesEpisodes = []
         seriesDetails = nil
@@ -966,16 +982,14 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             do {
                 let result = try await loadDetails(item)
                 guard let self, !Task.isCancelled, self.seriesGeneration == generation,
-                      self.seriesOverviewItem?.id == item.id, self.isViewingSeriesDetails,
-                      self.currentChannel?.id == item.id else { return }
+                      self.seriesOverviewItem?.id == item.id, self.isViewingSeriesDetails else { return }
                 self.seriesEpisodes = result.episodes
                 self.seriesDetails = result.details
                 self.isLoadingEpisodes = false
                 self.resumeRecentEpisode(recentEpisodeKey)
             } catch {
                 guard let self, !Task.isCancelled, self.seriesGeneration == generation,
-                      self.seriesOverviewItem?.id == item.id, self.isViewingSeriesDetails,
-                      self.currentChannel?.id == item.id else { return }
+                      self.seriesOverviewItem?.id == item.id, self.isViewingSeriesDetails else { return }
                 self.isLoadingEpisodes = false
                 self.seriesDetailsFailed = true
             }
@@ -1017,7 +1031,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func saveProgress(force: Bool = false, completed: Bool = false) {
-        guard let item = currentChannel, item.isVOD, !isViewingSeriesDetails,
+        guard let item = currentChannel, item.isVOD,
               pendingResumePosition == nil, player?.currentItem != nil || useVLCPlayback else { return }
         guard force || Date().timeIntervalSince(lastProgressSave) >= 5 else { return }
         lastProgressSave = Date()
@@ -1252,6 +1266,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         tearDownPlayback()
         resumeRequest = nil
         seriesOverviewItem = nil
+        playingSeries = nil
         seriesDetails = nil
         seriesDetailsFailed = false
         movieOverviewItem = nil
@@ -1266,6 +1281,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Skips to the next channel in the current filtered list.
     public func nextChannel() {
+        if isViewingMovieDetails || isViewingSeriesDetails { dismissDetails() }
         if currentChannel?.contentType == .series, !isViewingSeriesDetails, !seriesEpisodes.isEmpty {
             let index = seriesEpisodes.firstIndex { $0.subtitleCacheKey == currentChannel?.subtitleCacheKey } ?? -1
             let candidates = seriesEpisodes.dropFirst(index + 1)
@@ -1285,6 +1301,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Skips to the previous channel in the current filtered list.
     public func previousChannel() {
+        if isViewingMovieDetails || isViewingSeriesDetails { dismissDetails() }
         if currentChannel?.contentType == .series, !isViewingSeriesDetails, !seriesEpisodes.isEmpty {
             let index = seriesEpisodes.firstIndex { $0.subtitleCacheKey == currentChannel?.subtitleCacheKey } ?? 0
             if let previous = seriesEpisodes.prefix(index).last(where: { downloads.isOnline || downloads.localURL(for: $0) != nil }) { playDirectStream(previous) }

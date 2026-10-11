@@ -106,7 +106,9 @@ struct MovieDetailsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Button { manager.stop() } label: { Label("Back to Movies", systemImage: "chevron.left") }
+                Button { manager.dismissDetails() } label: {
+                    Label(manager.currentChannel == nil ? "Back to Movies" : "Back to Player", systemImage: "chevron.left")
+                }
                     .buttonStyle(.plain)
                 if let backdrop = details?.backdrop, manager.downloads.isOnline {
                     AsyncImage(url: backdrop) { image in

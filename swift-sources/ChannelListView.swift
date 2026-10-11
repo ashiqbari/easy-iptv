@@ -201,7 +201,7 @@ public struct ChannelListView: View {
         }
         return ChannelRowView(
             channel: channel,
-            isPlaying: manager.currentChannel?.id == channel.id,
+            isPlaying: manager.isCurrentPlayback(channel),
             onSelect: {
                 if isRecent { manager.playRecentlyWatched(channel) }
                 else { manager.playChannel(channel) }
