@@ -1116,26 +1116,29 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Tracks the media clock at 100 ms intervals for progress and sidecar subtitles.
     private func setupTimeObserver() {
         removeTimeObserver()
-        guard let pl = self.player, let observedItem = pl.currentItem else { return }
+        guard currentChannel?.isVOD == true, let pl = self.player, let observedItem = pl.currentItem else { return }
         
         let interval = CMTime(seconds: 0.1, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         timeObserverToken = pl.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak pl] time in
             Task { @MainActor [weak self, weak pl] in
                 guard let self = self, let pl, !self.isSeeking, !self.useVLCPlayback,
                       self.player === pl, pl.currentItem === observedItem else { return }
-                let sec = time.seconds
-                if sec.isFinite && sec >= 0 {
-                    self.currentTime = sec
-                }
+                self.updatePlaybackClock(position: time.seconds, duration: observedItem.duration.seconds)
                 self.saveProgress()
-                if let item = self.player?.currentItem {
-                    let dur = item.duration.seconds
-                    if dur.isFinite && dur > 0 {
-                        self.duration = dur
-                    }
-                }
             }
         }
+    }
+
+    func updatePlaybackClock(position: Double, duration: Double) {
+        // Live clocks are read from the engine; publishing them redraws the entire library without a visible time display.
+        guard currentChannel?.isVOD == true else { return }
+        if position.isFinite, position >= 0, currentTime != position { currentTime = position }
+        if duration.isFinite, duration > 0, self.duration != duration { self.duration = duration }
+    }
+
+    func updatePlaybackState(playing: Bool, buffering: Bool) {
+        if isPlaying != playing { isPlaying = playing }
+        if isBuffering != buffering { isBuffering = buffering }
     }
     
     private func removeTimeObserver() {
@@ -1165,8 +1168,16 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Jumps forward or backward by a delta in seconds (e.g. +10s or -10s).
     public func seekBy(seconds: Double) {
-        let maxDur = duration > 0 ? duration : 999999
-        let target = max(0, min(maxDur, currentTime + seconds))
+        var maxDur = duration > 0 ? duration : 999999
+        if currentChannel?.contentType == .live {
+            var liveDuration = player?.currentItem?.duration.seconds ?? 0
+            #if os(macOS)
+            if useVLCPlayback { liveDuration = Double(vlcPlayer?.media?.length.intValue ?? 0) / 1000 }
+            #endif
+            if liveDuration.isFinite, liveDuration > 0 { maxDur = liveDuration }
+        }
+        let position = currentChannel?.isVOD == true ? currentTime : playbackPosition()
+        let target = max(0, min(maxDur, position + seconds))
         seek(to: target)
     }
     
@@ -1516,8 +1527,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self = self, !self.useVLCPlayback, self.player === pl,
                           pl.currentItem === playerItem else { return }
-                    self.isPlaying = self.wantsPlayback && pl.timeControlStatus == .playing
-                    self.isBuffering = self.wantsPlayback && pl.timeControlStatus == .waitingToPlayAtSpecifiedRate
+                    self.updatePlaybackState(playing: self.wantsPlayback && pl.timeControlStatus == .playing,
+                                             buffering: self.wantsPlayback && pl.timeControlStatus == .waitingToPlayAtSpecifiedRate)
                     if self.isPlaying { self.recordPlaybackStarted() }
                 }
             }
@@ -1647,8 +1658,8 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
         Task { @MainActor [weak self] in
             guard let self else { return }
             guard self.vlcPlayer === player else { return }
-            self.isPlaying = self.wantsPlayback && playing
-            self.isBuffering = self.wantsPlayback && (state == .opening || (state == .buffering && !playing))
+            self.updatePlaybackState(playing: self.wantsPlayback && playing,
+                                     buffering: self.wantsPlayback && (state == .opening || (state == .buffering && !playing)))
             if state == .error {
                 self.isBuffering = false
                 self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
@@ -1656,7 +1667,7 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
                 self.applyPendingVLCResume(player)
                 self.recordPlaybackStarted()
                 if !self.wantsPlayback { player.pause() }
-                self.errorMessage = nil
+                if self.errorMessage != nil { self.errorMessage = nil }
                 self.subtitles.nativePlayerDidStart()
             } else if state == .ended {
                 self.saveProgress(force: true, completed: true)
@@ -1672,8 +1683,7 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
         let total = Double(player.media?.length.intValue ?? 0) / 1000
         Task { @MainActor [weak self] in
             guard let self, self.vlcPlayer === player, !self.isSeeking else { return }
-            if current.isFinite && current >= 0 { self.currentTime = current }
-            if total.isFinite && total > 0 { self.duration = total }
+            self.updatePlaybackClock(position: current, duration: total)
             self.applyPendingVLCResume(player)
             self.saveProgress()
         }

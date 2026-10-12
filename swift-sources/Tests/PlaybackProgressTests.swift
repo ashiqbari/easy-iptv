@@ -1,12 +1,77 @@
 import XCTest
 import AVFoundation
 import CoreVideo
+import Combine
 #if os(macOS)
 import VLC
 #endif
 @testable import EasyIPTV
 
 final class PlaybackProgressTests: XCTestCase {
+    @MainActor func testLiveClockTicksDoNotInvalidateLibraryAndVODClockStillUpdates() {
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        manager.currentChannel = media(url: URL(string: "https://fixture.invalid/live.m3u8")!, type: .live)
+        var changes = 0
+        let subscription = manager.objectWillChange.sink { changes += 1 }
+        defer { subscription.cancel() }
+        for tick in 1...100 { manager.updatePlaybackClock(position: Double(tick), duration: 300) }
+        XCTAssertEqual(changes, 0)
+        XCTAssertEqual(manager.currentTime, 0)
+        XCTAssertEqual(manager.duration, 0)
+        for type in [M3UItem.ContentType.movie, .series] {
+            manager.currentChannel = media(type: type)
+            changes = 0
+            manager.updatePlaybackClock(position: 120, duration: 300)
+            XCTAssertEqual(manager.currentTime, 120)
+            XCTAssertEqual(manager.duration, 300)
+            changes = 0
+            manager.updatePlaybackClock(position: 120, duration: 300)
+            manager.updatePlaybackClock(position: .nan, duration: .infinity)
+            XCTAssertEqual(changes, 0)
+            manager.updatePlaybackClock(position: 121, duration: 300)
+            XCTAssertEqual(changes, 1)
+        }
+    }
+
+    @MainActor func testRepeatedPlaybackStateDoesNotInvalidateLibrary() {
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        manager.currentChannel = media(type: .live)
+        manager.updatePlaybackState(playing: true, buffering: false)
+        var changes = 0
+        let subscription = manager.objectWillChange.sink { changes += 1 }
+        defer { subscription.cancel() }
+        for _ in 0..<100 { manager.updatePlaybackState(playing: true, buffering: false) }
+        XCTAssertEqual(changes, 0)
+        manager.updatePlaybackState(playing: false, buffering: true)
+        XCTAssertFalse(manager.isPlaying)
+        XCTAssertTrue(manager.isBuffering)
+        XCTAssertEqual(changes, 2)
+    }
+
+    #if os(macOS)
+    @MainActor func testLiveRelativeSeekReadsEngineClockWithoutPublishedTicks() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        manager.playDirectStreamWithAVKit(media(url: url, type: .live))
+        let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
+        XCTAssertTrue(ready)
+        let player = try XCTUnwrap(manager.player)
+        player.pause()
+        await withCheckedContinuation { continuation in
+            player.seek(to: CMTime(seconds: 120, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { _ in continuation.resume() }
+        }
+        XCTAssertEqual(manager.currentTime, 0)
+        manager.seekBy(seconds: 10)
+        XCTAssertEqual(manager.currentTime, 130, accuracy: 1)
+        manager.seekBy(seconds: 1000)
+        XCTAssertEqual(manager.currentTime, 300, accuracy: 1)
+    }
+    #endif
+
     private func media(url: URL = URL(string: "https://provider.example/series/user/password/7.mp4")!,
                        type: M3UItem.ContentType = .series, season: Int = 1, episode: Int = 1) -> M3UItem {
         M3UItem(name: "Episode", streamURL: url, contentType: type,
