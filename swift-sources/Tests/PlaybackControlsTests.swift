@@ -95,16 +95,74 @@ final class PlaybackControlsTests: XCTestCase {
         XCTAssertTrue(manager.playbackCursorHidden)
     }
 
-    func testWindowedPlaybackNeverHidesCursorAndOutsidePlayerNeverHidesHUD() {
+    func testOutsidePlayerHidesHUDWithoutHidingOtherDisplaysCursor() {
         let manager = playing()
         defer { manager.stop() }
         manager.pointerInsidePlayer = false
         manager.hideControlsIfIdle()
-        XCTAssertTrue(manager.showVideoControls)
+        XCTAssertFalse(manager.showVideoControls)
+        XCTAssertFalse(manager.playbackCursorHidden)
         manager.isFullscreen = false
         manager.hideControlsIfIdle()
         XCTAssertFalse(manager.showVideoControls)
         XCTAssertFalse(manager.playbackCursorHidden)
+    }
+
+    func testPointerLeavingClearsHoverButKeepsMenusAndRestartsIdleDeadline() async throws {
+        let manager = playing()
+        defer { manager.stop() }
+        manager.setControlsInteraction("bottomBar", active: true)
+        manager.setControlsInteraction("menu-player", active: true)
+        manager.pointerLeftPlayer()
+        XCTAssertTrue(manager.controlsAutoHideBlocked)
+        manager.setControlsInteraction("menu-player", active: false)
+        XCTAssertFalse(manager.controlsAutoHideBlocked)
+        try await Task.sleep(nanoseconds: 2_700_000_000)
+        XCTAssertFalse(manager.showVideoControls)
+        XCTAssertFalse(manager.playbackCursorHidden)
+    }
+
+    func testLosingWindowAndAppFocusStillHidesControls() async throws {
+        let manager = playing()
+        let view = PlaybackActivityNSView(manager: manager)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer { manager.stop(); window.close() }
+        await Task.yield()
+        manager.setControlsInteraction("topBar", active: true)
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApplication.shared)
+        XCTAssertFalse(manager.controlsAutoHideBlocked)
+        try await Task.sleep(nanoseconds: 2_700_000_000)
+        XCTAssertFalse(manager.showVideoControls)
+        view.updateTrackingAreas()
+        XCTAssertTrue(view.trackingAreas.allSatisfy { $0.options.contains(.activeAlways) && $0.options.contains(.mouseMoved) })
+        let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: NSPoint(x: 100, y: 100), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+        view.handle(event)
+        XCTAssertTrue(manager.showVideoControls)
+    }
+
+    func testNativeControlHoverWorksWithoutKeyWindow() throws {
+        let manager = playing()
+        defer { manager.stop() }
+        let view = PlaybackControlNSView(manager: manager, region: "centerControls")
+        view.updateTrackingAreas()
+        XCTAssertTrue(view.trackingAreas.allSatisfy { $0.options.contains(.activeAlways) })
+        let event = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 0))
+        view.mouseEntered(with: event)
+        manager.hideControlsIfIdle()
+        XCTAssertTrue(manager.showVideoControls)
+        view.mouseExited(with: event)
+        manager.hideControlsIfIdle()
+        XCTAssertFalse(manager.showVideoControls)
+    }
+
+    func testDiagnosticsRatesHandleStartupResetAndMeasuredInterval() {
+        XCTAssertNil(PlaybackDiagnosticsView.rate(current: 100, previous: nil, elapsed: 1))
+        XCTAssertNil(PlaybackDiagnosticsView.rate(current: 5, previous: 100, elapsed: 1))
+        XCTAssertNil(PlaybackDiagnosticsView.rate(current: 100, previous: 50, elapsed: 0))
+        XCTAssertEqual(PlaybackDiagnosticsView.rate(current: 220, previous: 100, elapsed: 2), 60)
     }
 
     func testNativeInputAndTrackingCleanup() async throws {

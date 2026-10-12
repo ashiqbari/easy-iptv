@@ -18,11 +18,44 @@ struct PlaybackActivityTracking: NSViewRepresentable {
     static func dismantleNSView(_ view: PlaybackActivityNSView, coordinator: ()) { view.stopTracking() }
 }
 
+private struct PlaybackControlTracking: NSViewRepresentable {
+    let manager: IPTVPlayerManager
+    let region: String
+    func makeNSView(context: Context) -> PlaybackControlNSView { PlaybackControlNSView(manager: manager, region: region) }
+    func updateNSView(_ view: PlaybackControlNSView, context: Context) { }
+    static func dismantleNSView(_ view: PlaybackControlNSView, coordinator: ()) { view.stopTracking() }
+}
+
+final class PlaybackControlNSView: NSView {
+    private weak var manager: IPTVPlayerManager?
+    private let region: String
+    init(manager: IPTVPlayerManager, region: String) { self.manager = manager; self.region = region; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.inVisibleRect, .mouseEnteredAndExited, .activeAlways], owner: self, userInfo: nil))
+    }
+    override func mouseEntered(with event: NSEvent) { manager?.setControlsInteraction(region, active: true) }
+    override func mouseExited(with event: NSEvent) { manager?.setControlsInteraction(region, active: false) }
+    func stopTracking() {
+        Task { @MainActor [weak manager, region] in manager?.setControlsInteraction(region, active: false) }
+    }
+}
+
+private extension View {
+    func playbackControlHover(_ manager: IPTVPlayerManager, region: String) -> some View {
+        background(PlaybackControlTracking(manager: manager, region: region))
+    }
+}
+
 final class PlaybackActivityNSView: NSView {
     private weak var manager: IPTVPlayerManager?
     private weak var trackedWindow: NSWindow?
     private var previousMouseMovedEvents = false
     private var monitor: Any?
+    private var globalMonitor: Any?
     private var observers: [NSObjectProtocol] = []
     private var area: NSTrackingArea?
     private var trackedMenus = Set<String>()
@@ -43,9 +76,18 @@ final class PlaybackActivityNSView: NSView {
             self?.handle(event)
             return event
         }
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard self?.manager?.isFullscreen == true else { return }
+                self?.updatePointer()
+            }
+        }
         for name in [NSWindow.didResignKeyNotification, NSApplication.didResignActiveNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: name == NSWindow.didResignKeyNotification ? window : nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.leavePlayer() }
+                MainActor.assumeIsolated {
+                    self?.updatePointer(activity: false)
+                    self?.manager?.scheduleControlsAutoHide()
+                }
             })
         }
         observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
@@ -72,11 +114,12 @@ final class PlaybackActivityNSView: NSView {
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let area { removeTrackingArea(area) }
-        let next = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .mouseEnteredAndExited, .activeInKeyWindow], owner: self, userInfo: nil)
+        let next = NSTrackingArea(rect: .zero, options: [.inVisibleRect, .mouseEnteredAndExited, .mouseMoved, .activeAlways], owner: self, userInfo: nil)
         area = next
         addTrackingArea(next)
     }
     override func mouseEntered(with event: NSEvent) { updatePointer() }
+    override func mouseMoved(with event: NSEvent) { updatePointer() }
     override func mouseExited(with event: NSEvent) { leavePlayer() }
     override func setFrameSize(_ newSize: NSSize) {
         let changed = frame.size != newSize
@@ -102,20 +145,23 @@ final class PlaybackActivityNSView: NSView {
         } else { leavePlayer() }
     }
 
-    private func updatePointer() {
+    private func updatePointer(activity: Bool = true) {
         guard let window, let manager, !bounds.isEmpty else { return }
-        manager.pointerInsidePlayer = bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
-        if manager.pointerInsidePlayer { manager.notePlayerActivity() }
-        else { manager.cancelControlsAutoHide() }
+        let inside = window.isVisible && !window.isMiniaturized && bounds.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        if inside {
+            manager.pointerInsidePlayer = true
+            if activity { manager.notePlayerActivity() }
+        } else { leavePlayer() }
     }
     private func leavePlayer() {
-        manager?.pointerInsidePlayer = false
-        manager?.cancelControlsAutoHide()
+        manager?.pointerLeftPlayer()
     }
 
     func stopTracking() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
+        globalMonitor = nil
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         observers = []
         let wasTracking = trackedWindow != nil
@@ -127,9 +173,16 @@ final class PlaybackActivityNSView: NSView {
         Task { @MainActor [weak self, weak manager] in
             for key in menus { manager?.setControlsInteraction(key, active: false) }
             guard self?.trackedWindow == nil else { return }
-            manager?.pointerInsidePlayer = false
-            manager?.cancelControlsAutoHide()
+            manager?.pointerLeftPlayer()
         }
+    }
+}
+#endif
+
+#if !os(macOS)
+private extension View {
+    func playbackControlHover(_ manager: IPTVPlayerManager, region: String) -> some View {
+        onHover { manager.setControlsInteraction(region, active: $0) }
     }
 }
 #endif
@@ -151,6 +204,7 @@ public struct IPTVPlaybackView: View {
     
     @ObservedObject var manager: IPTVPlayerManager
     @State private var visibilityID = UUID()
+    @State private var showingPlaybackDiagnostics = false
     
     public init(manager: IPTVPlayerManager) {
         self.manager = manager
@@ -219,6 +273,11 @@ public struct IPTVPlaybackView: View {
         }
         // macOS keyboard shortcuts (macOS 15+)
         #if os(macOS)
+        .overlay(alignment: .topLeading) {
+            if showingPlaybackDiagnostics {
+                PlaybackDiagnosticsView(manager: manager).padding(20).allowsHitTesting(false)
+            }
+        }
         .onChange(of: manager.controlsAutoHideBlocked) { _, _ in manager.notePlayerActivity() }
         .background { PlaybackActivityTracking(manager: manager) }
         .background {
@@ -231,6 +290,8 @@ public struct IPTVPlaybackView: View {
                     .keyboardShortcut(.leftArrow, modifiers: [])
                 Button("") { manager.seekBy(seconds: 10) }
                     .keyboardShortcut(.rightArrow, modifiers: [])
+                Button("") { showingPlaybackDiagnostics.toggle() }
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
             }
             .opacity(0)
             .allowsHitTesting(false)
@@ -291,19 +352,19 @@ public struct IPTVPlaybackView: View {
     private var controlsOverlay: some View {
         VStack {
             // Top Navigation HUD Bar
-            topBar.onHover { manager.setControlsInteraction("topBar", active: $0) }
+            topBar.playbackControlHover(manager, region: "topBar")
                 .onDisappear { manager.setControlsInteraction("topBar", active: false) }
             
             Spacer()
             
             // Center Play / Pause & Skip HUD
-            centerControls.onHover { manager.setControlsInteraction("centerControls", active: $0) }
+            centerControls.playbackControlHover(manager, region: "centerControls")
                 .onDisappear { manager.setControlsInteraction("centerControls", active: false) }
             
             Spacer()
             
             // Bottom Action HUD Bar
-            bottomBar.onHover { manager.setControlsInteraction("bottomBar", active: $0) }
+            bottomBar.playbackControlHover(manager, region: "bottomBar")
                 .onDisappear { manager.setControlsInteraction("bottomBar", active: false) }
         }
         .padding()
@@ -1715,6 +1776,53 @@ public struct AVPlayerLayerRepresentable: NSViewRepresentable {
 }
 
 /// AppKit surface that attaches a VLCMediaPlayer to a native view.
+struct PlaybackDiagnosticsView: View {
+    @ObservedObject var manager: IPTVPlayerManager
+    @State private var report = "Reading playback statistics…"
+
+    static func rate(current: Int, previous: Int?, elapsed: Double) -> Double? {
+        guard let previous, current >= previous, elapsed > 0 else { return nil }
+        return Double(current - previous) / elapsed
+    }
+
+    private var playerIdentity: ObjectIdentifier {
+        if let player = manager.vlcPlayer { return ObjectIdentifier(player) }
+        if let player = manager.player { return ObjectIdentifier(player) }
+        return ObjectIdentifier(manager)
+    }
+
+    var body: some View {
+        Text(report).font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.white).padding(10).background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 8))
+            .task(id: playerIdentity) {
+                var frames: Int?, bytes: Int?
+                var sampledAt = ProcessInfo.processInfo.systemUptime
+                while !Task.isCancelled {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    let elapsed = now - sampledAt
+                    if manager.useVLCPlayback, let player = manager.vlcPlayer, let media = player.media {
+                        let stats = media.statistics
+                        let size = player.videoSize
+                        let fps = Self.rate(current: Int(stats.displayedPictures), previous: frames, elapsed: elapsed)
+                        let throughput = Self.rate(current: Int(stats.readBytes), previous: bytes, elapsed: elapsed).map { $0 * 8 / 1_000_000 }
+                        report = "VLC · \(Int(size.width))×\(Int(size.height))\nDisplayed FPS: \(fps.map { String(format: "%.1f", $0) } ?? "—") · Lost frames: \(stats.lostPictures)\nInput: \(throughput.map { String(format: "%.2f Mbps", $0) } ?? "—")\nBuffer: \(manager.isBuffering ? "buffering" : "not buffering") (seconds unavailable)"
+                        frames = Int(stats.displayedPictures); bytes = Int(stats.readBytes)
+                    } else if let item = manager.player?.currentItem {
+                        let size = item.presentationSize
+                        let event = item.accessLog()?.events.last
+                        let clock = item.currentTime().seconds
+                        let buffer = item.loadedTimeRanges.map(\.timeRangeValue).first {
+                            $0.start.seconds <= clock && CMTimeRangeGetEnd($0).seconds >= clock
+                        }.map { CMTimeRangeGetEnd($0).seconds - clock } ?? 0
+                        report = "AVKit · \(Int(size.width))×\(Int(size.height))\nDropped frames: \(event.map { String($0.numberOfDroppedVideoFrames) } ?? "—")\nObserved bitrate: \(event.map { String(format: "%.2f Mbps", $0.observedBitrate / 1_000_000) } ?? "—")\nBuffer: \(String(format: "%.1f s", buffer)) · \(manager.isBuffering ? "buffering" : "not buffering")"
+                    } else { report = "No active playback" }
+                    sampledAt = now
+                    do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+                }
+            }
+    }
+}
+
 private struct VLCVideoSurface: NSViewRepresentable {
     let player: VLCMediaPlayer
     let shouldPlay: Bool

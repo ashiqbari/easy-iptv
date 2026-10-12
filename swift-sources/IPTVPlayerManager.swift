@@ -1346,6 +1346,15 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         scheduleControlsAutoHide()
     }
 
+    func pointerLeftPlayer() {
+        let wasInside = pointerInsidePlayer
+        pointerInsidePlayer = false
+        let hadHover = !controlsInteractionHolds.isDisjoint(with: ["topBar", "centerControls", "bottomBar"])
+        controlsInteractionHolds.subtract(["topBar", "centerControls", "bottomBar"])
+        setPlaybackCursorHidden(false)
+        if wasInside || hadHover { scheduleControlsAutoHide() }
+    }
+
     private func setPlaybackCursorHidden(_ hidden: Bool) {
         guard playbackCursorHidden != hidden else { return }
         playbackCursorHidden = hidden
@@ -1357,11 +1366,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     func hideControlsIfIdle() {
         guard isPlaying, currentChannel != nil, !controlsAutoHideBlocked else { return }
         #if os(macOS)
-        guard !isFullscreen || pointerInsidePlayer,
-              NSApp?.modalWindow == nil, NSApp?.windows.contains(where: { $0.attachedSheet != nil }) != true else { return }
+        guard NSApp?.modalWindow == nil, NSApp?.windows.contains(where: { $0.attachedSheet != nil }) != true else { return }
         #endif
         withAnimation(.easeInOut(duration: 0.25)) { showVideoControls = false }
-        setPlaybackCursorHidden(isFullscreen)
+        setPlaybackCursorHidden(isFullscreen && pointerInsidePlayer)
     }
 
     /// Uses the same inactivity deadline for the fullscreen cursor and HUD.
@@ -1369,9 +1377,6 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         controlsTimer?.cancel()
         controlsTimer = nil
         guard isPlaying, currentChannel != nil, !controlsAutoHideBlocked else { return }
-        #if os(macOS)
-        guard !isFullscreen || pointerInsidePlayer else { return }
-        #endif
         let delay: UInt64 = isFullscreen ? 2_500_000_000 : 4_000_000_000
         controlsTimer = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: delay)
