@@ -4,6 +4,37 @@ import AppKit
 
 @MainActor
 final class PlaybackControlsTests: XCTestCase {
+    func testPlaybackBadgeDistinguishesContentAndKnownLivePosition() {
+        func item(_ type: M3UItem.ContentType, _ extensionName: String = "ts") -> M3UItem {
+            M3UItem(name: "Badge fixture", streamURL: URL(fileURLWithPath: "/private/tmp/badge.\(extensionName)"), contentType: type)
+        }
+        for type in [M3UItem.ContentType.movie, .series] {
+            for paused in [false, true] {
+                XCTAssertEqual(IPTVPlayerManager.playbackBadge(for: item(type), paused: paused, liveOffset: 0), type == .movie ? "Movie" : "Episode")
+            }
+        }
+        XCTAssertEqual(IPTVPlayerManager.playbackBadge(for: item(.live, "mp4"), paused: false, liveOffset: 0), "Movie")
+        for offset in [nil, Double.nan, Double.infinity, -1] {
+            XCTAssertEqual(IPTVPlayerManager.playbackBadge(for: item(.live), paused: false, liveOffset: offset), "Live TV")
+        }
+        XCTAssertEqual(IPTVPlayerManager.playbackBadge(for: item(.live), paused: false, liveOffset: 30), "LIVE")
+        XCTAssertEqual(IPTVPlayerManager.playbackBadge(for: item(.live), paused: false, liveOffset: 31), "Behind live")
+        XCTAssertEqual(IPTVPlayerManager.playbackBadge(for: item(.live), paused: true, liveOffset: 0), "Live TV · Paused")
+    }
+
+    func testPlaybackBadgeFollowsPlayingItemWhileBrowsing() {
+        let manager = playing()
+        defer { manager.stop() }
+        for type in M3UItem.ContentType.allCases {
+            manager.selectedSection = type
+            XCTAssertEqual(manager.playbackBadge, "Movie")
+        }
+        manager.currentChannel = M3UItem(name: "Live fixture", streamURL: URL(fileURLWithPath: "/private/tmp/badge.ts"), contentType: .live)
+        XCTAssertEqual(manager.playbackBadge, "Live TV · Paused")
+        manager.stop()
+        XCTAssertNil(manager.playbackBadge)
+    }
+
     private func playing(_ type: M3UItem.ContentType = .movie) -> IPTVPlayerManager {
         _ = NSApplication.shared
         let manager = IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: "controls-\(UUID())")!)

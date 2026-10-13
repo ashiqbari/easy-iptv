@@ -9,6 +9,25 @@ import SwiftUI
 import AVFoundation
 import QuartzCore
 
+private struct PlaybackBadge: View {
+    @ObservedObject var manager: IPTVPlayerManager
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            if let title = manager.playbackBadge {
+                Text(title)
+                    .font(.caption2.bold())
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background((title == "LIVE" ? Color.red : Color.white.opacity(0.2)))
+                    .cornerRadius(4)
+                    .help("LIVE means within 30 seconds of the stream's reported live edge. Live TV means the position cannot be verified.")
+            }
+        }
+    }
+}
+
 #if os(macOS)
 /// Observes input without replacing the AVPlayer/VLC surface or swallowing its events.
 struct PlaybackActivityTracking: NSViewRepresentable {
@@ -441,20 +460,8 @@ public struct IPTVPlaybackView: View {
                         
                         if manager.downloads.localURL(for: channel) != nil {
                             Label("Downloaded", systemImage: "checkmark.circle.fill").font(.caption2.bold()).foregroundStyle(.white)
-                        } else if channel.contentType == .live {
-                        // Live Badge
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 6, height: 6)
-                            Text("LIVE")
-                                .font(.caption2.bold())
-                                .foregroundColor(.white)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.red.opacity(0.8))
-                        .cornerRadius(4)
+                        } else {
+                            PlaybackBadge(manager: manager)
                         }
                     }
                     

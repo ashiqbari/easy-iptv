@@ -1136,6 +1136,30 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         }
     }
 
+    var playbackBadge: String? {
+        guard let channel = currentChannel else { return nil }
+        var liveOffset: Double?
+        if !useVLCPlayback, let item = player?.currentItem,
+           item.status == .readyToPlay, item.duration.isIndefinite {
+            let position = item.currentTime().seconds
+            let end = item.seekableTimeRanges.map { CMTimeRangeGetEnd($0.timeRangeValue).seconds }
+                .filter { $0.isFinite }.max()
+            if position.isFinite, let end, end > 0, position >= 0, position <= end {
+                liveOffset = end - position
+            }
+        }
+        return Self.playbackBadge(for: channel, paused: !wantsPlayback, liveOffset: liveOffset)
+    }
+
+    static func playbackBadge(for item: M3UItem, paused: Bool, liveOffset: Double?) -> String {
+        if item.contentType == .series { return "Episode" }
+        if item.isVOD { return "Movie" }
+        if paused { return "Live TV · Paused" }
+        guard let liveOffset, liveOffset.isFinite, liveOffset >= 0 else { return "Live TV" }
+        // Allow normal HLS latency before calling playback delayed.
+        return liveOffset > 30 ? "Behind live" : "LIVE"
+    }
+
     func updatePlaybackClock(position: Double, duration: Double) {
         // Live clocks are read from the engine; publishing them redraws the entire library without a visible time display.
         guard currentChannel?.isVOD == true else { return }

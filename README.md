@@ -106,6 +106,12 @@ On macOS, **Command–Shift–I** toggles playback diagnostics (off by default):
 VLC displayed FPS/lost frames/input throughput, or AVKit bitrate/buffer/dropped frames.
 These measurements do not change playback quality.
 
+The player badge describes the playing item, even while browsing another section:
+**Movie**, **Episode**, or **Live TV**. **LIVE** indicates playback within 30 seconds
+of an AVKit stream's reported live edge; **Behind live** indicates a larger delay.
+Streams without live-edge timing (including VLC) show **Live TV** instead of claiming
+they are at the live edge. Paused channels show **Live TV · Paused**.
+
 Use the **aspect ratio button beside subtitles and volume** in the bottom player
 controls to choose **Auto / Original**, **16:9**, **4:3**,
 **21:9**, **1:1**, **Fill / Stretch**, or **Zoom / Crop**. Fixed ratios fit inside
