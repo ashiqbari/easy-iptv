@@ -249,6 +249,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Video gravity aspect fit / fill mode.
     @Published public var videoGravity: AVLayerVideoGravity = .resizeAspect
+    @Published public var screenSize: VideoScreenSize = .auto {
+        didSet {
+            if oldValue != screenSize { storageDefaults.set(screenSize.rawValue, forKey: VideoScreenSize.storageKey) }
+        }
+    }
     
     /// Indicates whether the active video playback view is expanded to fullscreen.
     @Published public var isFullscreen: Bool = false {
@@ -417,6 +422,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         libraryLoader = LibraryLoader()
         libraryPersistence = LibraryPersistence(url: Self.defaultCacheURL, defaults: .standard)
         super.init()
+        screenSize = VideoScreenSize(rawValue: storageDefaults.string(forKey: VideoScreenSize.storageKey) ?? "") ?? .auto
         observeProgress()
         loadPersistedState()
         setupAudioSessionIfAvailable()
@@ -433,6 +439,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         libraryPersistence = LibraryPersistence(url: cacheURL ?? FileManager.default.temporaryDirectory
             .appendingPathComponent("EasyIPTVTests-\(UUID())/cached_channels.json"), defaults: progressDefaults)
         super.init()
+        screenSize = VideoScreenSize(rawValue: storageDefaults.string(forKey: VideoScreenSize.storageKey) ?? "") ?? .auto
         observeProgress()
     }
 

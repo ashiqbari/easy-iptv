@@ -106,6 +106,14 @@ On macOS, **Command–Shift–I** toggles playback diagnostics (off by default):
 VLC displayed FPS/lost frames/input throughput, or AVKit bitrate/buffer/dropped frames.
 These measurements do not change playback quality.
 
+Use the **aspect ratio button beside subtitles and volume** in the bottom player
+controls to choose **Auto / Original**, **16:9**, **4:3**,
+**21:9**, **1:1**, **Fill / Stretch**, or **Zoom / Crop**. Fixed ratios fit inside
+the player with black bars; Stretch fills the area, and Zoom fills it by cropping
+the edges. Changes apply during playback without restarting the stream. The choice
+is remembered globally for all content and both playback engines; **Reset to Auto**
+restores the video's original proportions.
+
 </details>
 
 <details>

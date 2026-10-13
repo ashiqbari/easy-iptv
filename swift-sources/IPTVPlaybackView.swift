@@ -99,7 +99,7 @@ final class PlaybackActivityNSView: NSView {
                     guard let self, let menu = notification.object as? NSMenu else { return }
                     let key = "menu-\(ObjectIdentifier(menu))"
                     if name == NSMenu.didBeginTrackingNotification {
-                        guard self.manager?.isFullscreen == true else { return }
+                        guard self.manager?.currentChannel != nil else { return }
                         self.trackedMenus.insert(key)
                         self.manager?.setControlsInteraction(key, active: true)
                     } else if self.trackedMenus.remove(key) != nil {
@@ -221,7 +221,8 @@ public struct IPTVPlaybackView: View {
                     if let player = manager.vlcPlayer {
                         VLCVideoSurface(
                             player: player,
-                            shouldPlay: manager.isPlaying || manager.isBuffering
+                            shouldPlay: manager.isPlaying || manager.isBuffering,
+                            screenSize: manager.screenSize
                         )
                             .ignoresSafeArea()
                             .overlay {
@@ -305,7 +306,7 @@ public struct IPTVPlaybackView: View {
     private var avPlaybackContent: some View {
         if let player = manager.player {
                 // Direct AVPlayerLayer rendering via explicit platform representable
-                AVPlayerLayerRepresentable(player: player, videoGravity: manager.videoGravity)
+                AVPlayerLayerRepresentable(player: player, videoGravity: manager.videoGravity, screenSize: manager.screenSize)
                     .ignoresSafeArea()
                     .overlay(
                         Color.clear
@@ -505,7 +506,7 @@ public struct IPTVPlaybackView: View {
                 }
                 
                 // Playback engine selector
-#if os(macOS)
+                #if os(macOS)
                 Menu {
                     Button {
                         if manager.useVLCPlayback, let channel = manager.currentChannel {
@@ -529,8 +530,8 @@ public struct IPTVPlaybackView: View {
                     .cornerRadius(6)
                 }
                 .menuStyle(.borderlessButton)
-                .help("Switch between AVKit and the VLC playback engine")
-#endif
+                .help("Choose the playback engine")
+                #endif
                 
                 // Favorite Toggle
                 Button {
@@ -685,6 +686,7 @@ public struct IPTVPlaybackView: View {
                     streamStatus
                     HStack {
                         episodeAndSubtitleControls
+                        aspectRatioControl
                         Spacer(minLength: 0)
                     }
                     HStack(spacing: 4) {
@@ -703,6 +705,7 @@ public struct IPTVPlaybackView: View {
             streamStatus
             Spacer()
             episodeAndSubtitleControls
+            aspectRatioControl
             volumeControls
             playbackActions
         }
@@ -746,6 +749,28 @@ public struct IPTVPlaybackView: View {
         if manager.currentChannel?.isVOD == true {
             SubtitleControls(manager: manager, controller: manager.subtitles)
         }
+    }
+
+    private var aspectRatioControl: some View {
+        Menu {
+            Picker("Aspect ratio", selection: $manager.screenSize) {
+                ForEach(VideoScreenSize.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
+            }
+            Button("Reset to Auto") { manager.screenSize = .auto }
+        } label: {
+            Label(manager.screenSize.shortTitle, systemImage: "aspectratio")
+                .font(.caption.bold())
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.2))
+                .cornerRadius(6)
+        }
+        #if os(macOS)
+        .menuStyle(.borderlessButton)
+        #endif
+        .accessibilityLabel("Aspect ratio: \(manager.screenSize.title)")
+        .help("Change aspect ratio (\(manager.screenSize.title))")
     }
 
     private var volumeControls: some View {
@@ -1723,6 +1748,7 @@ import AppKit
 /// and provides 60fps hardware-accelerated video presentation via Metal / CoreAnimation.
 public final class AVPlayerLayerNSView: NSView {
     private let playerLayer = AVPlayerLayer()
+    private var screenSize: VideoScreenSize = .auto
     
     public init(player: AVPlayer?, videoGravity: AVLayerVideoGravity = .resizeAspect) {
         super.init(frame: .zero)
@@ -1732,6 +1758,7 @@ public final class AVPlayerLayerNSView: NSView {
         playerLayer.player = player
         playerLayer.videoGravity = videoGravity
         playerLayer.backgroundColor = NSColor.black.cgColor
+        playerLayer.masksToBounds = true
         self.layer?.addSublayer(playerLayer)
     }
     
@@ -1743,16 +1770,21 @@ public final class AVPlayerLayerNSView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        playerLayer.frame = bounds
+        playerLayer.frame = screenSize.videoRect(in: bounds)
         CATransaction.commit()
     }
     
-    public func update(player: AVPlayer?, videoGravity: AVLayerVideoGravity) {
+    public func update(player: AVPlayer?, videoGravity: AVLayerVideoGravity, screenSize: VideoScreenSize = .auto) {
         if playerLayer.player !== player {
             playerLayer.player = player
         }
-        if playerLayer.videoGravity != videoGravity {
-            playerLayer.videoGravity = videoGravity
+        let gravity = screenSize == .auto ? videoGravity : screenSize.gravity
+        if playerLayer.videoGravity != gravity {
+            playerLayer.videoGravity = gravity
+        }
+        if self.screenSize != screenSize {
+            self.screenSize = screenSize
+            needsLayout = true
         }
     }
 }
@@ -1760,18 +1792,22 @@ public final class AVPlayerLayerNSView: NSView {
 public struct AVPlayerLayerRepresentable: NSViewRepresentable {
     public let player: AVPlayer
     public var videoGravity: AVLayerVideoGravity
+    public var screenSize: VideoScreenSize
     
-    public init(player: AVPlayer, videoGravity: AVLayerVideoGravity = .resizeAspect) {
+    public init(player: AVPlayer, videoGravity: AVLayerVideoGravity = .resizeAspect, screenSize: VideoScreenSize = .auto) {
         self.player = player
         self.videoGravity = videoGravity
+        self.screenSize = screenSize
     }
     
     public func makeNSView(context: Context) -> AVPlayerLayerNSView {
-        return AVPlayerLayerNSView(player: player, videoGravity: videoGravity)
+        let view = AVPlayerLayerNSView(player: player, videoGravity: videoGravity)
+        view.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
+        return view
     }
     
     public func updateNSView(_ nsView: AVPlayerLayerNSView, context: Context) {
-        nsView.update(player: player, videoGravity: videoGravity)
+        nsView.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
     }
 }
 
@@ -1823,31 +1859,74 @@ struct PlaybackDiagnosticsView: View {
     }
 }
 
+final class VLCVideoSurfaceNSView: NSView {
+    private weak var player: VLCMediaPlayer?
+    private var screenSize: VideoScreenSize = .auto
+    private var appliedAspect: String?
+    private var appliedCrop: String?
+    private var hasAppliedSettings = false
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func update(player: VLCMediaPlayer, shouldPlay: Bool, screenSize: VideoScreenSize) {
+        let attaching = (player.drawable as? NSView) !== self
+        if self.player !== player { hasAppliedSettings = false }
+        self.player = player
+        self.screenSize = screenSize
+        if attaching { player.drawable = self }
+        applyScreenSize()
+        if attaching && shouldPlay && !player.isPlaying && !player.willPlay { player.play() }
+    }
+
+    override func layout() {
+        super.layout()
+        applyScreenSize()
+    }
+
+    private func applyScreenSize() {
+        guard let player, bounds.width > 0, bounds.height > 0 else { return }
+        let areaRatio = "\(max(1, Int(bounds.width.rounded()))):\(max(1, Int(bounds.height.rounded())))"
+        let aspect = screenSize.ratio != nil ? screenSize.title : screenSize == .stretch ? areaRatio : nil
+        let crop = screenSize == .zoom ? areaRatio : nil
+        if !hasAppliedSettings || aspect != appliedAspect {
+            if let aspect {
+                var bytes = Array(aspect.utf8CString)
+                bytes.withUnsafeMutableBufferPointer { player.videoAspectRatio = $0.baseAddress }
+            } else { player.videoAspectRatio = nil }
+            appliedAspect = aspect
+        }
+        if !hasAppliedSettings || crop != appliedCrop {
+            if let crop {
+                var bytes = Array(crop.utf8CString)
+                bytes.withUnsafeMutableBufferPointer { player.videoCropGeometry = $0.baseAddress }
+            } else { player.videoCropGeometry = nil }
+            appliedCrop = crop
+        }
+        hasAppliedSettings = true
+    }
+}
+
 private struct VLCVideoSurface: NSViewRepresentable {
     let player: VLCMediaPlayer
     let shouldPlay: Bool
+    let screenSize: VideoScreenSize
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.black.cgColor
-        attach(player, to: view)
+    func makeNSView(context: Context) -> VLCVideoSurfaceNSView {
+        let view = VLCVideoSurfaceNSView()
+        view.update(player: player, shouldPlay: shouldPlay, screenSize: screenSize)
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        attach(player, to: nsView)
+    func updateNSView(_ nsView: VLCVideoSurfaceNSView, context: Context) {
+        nsView.update(player: player, shouldPlay: shouldPlay, screenSize: screenSize)
     }
 
-    private func attach(_ player: VLCMediaPlayer, to view: NSView) {
-        guard (player.drawable as? NSView) !== view else { return }
-        player.drawable = view
-        if shouldPlay && !player.isPlaying && !player.willPlay {
-            player.play()
-        }
-    }
-
-    static func dismantleNSView(_ nsView: NSView, coordinator: ()) {
+    static func dismantleNSView(_ nsView: VLCVideoSurfaceNSView, coordinator: ()) {
         // The manager owns and stops the VLC player when changing playback engines.
     }
 }
@@ -1856,32 +1935,42 @@ import UIKit
 
 /// High-performance UIKit UIView wrapping AVPlayerLayer.
 public final class AVPlayerLayerUIView: UIView {
-    public override static var layerClass: AnyClass {
-        return AVPlayerLayer.self
-    }
-    
-    public var playerLayer: AVPlayerLayer {
-        return layer as! AVPlayerLayer
-    }
+    public let playerLayer = AVPlayerLayer()
+    private var screenSize: VideoScreenSize = .auto
     
     public init(player: AVPlayer?, videoGravity: AVLayerVideoGravity = .resizeAspect) {
         super.init(frame: .zero)
         backgroundColor = .black
+        layer.addSublayer(playerLayer)
         playerLayer.player = player
         playerLayer.videoGravity = videoGravity
         playerLayer.backgroundColor = UIColor.black.cgColor
+        playerLayer.masksToBounds = true
     }
     
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
     
-    public func update(player: AVPlayer?, videoGravity: AVLayerVideoGravity) {
+    public override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.frame = screenSize.videoRect(in: bounds)
+        CATransaction.commit()
+    }
+
+    public func update(player: AVPlayer?, videoGravity: AVLayerVideoGravity, screenSize: VideoScreenSize = .auto) {
         if playerLayer.player !== player {
             playerLayer.player = player
         }
-        if playerLayer.videoGravity != videoGravity {
-            playerLayer.videoGravity = videoGravity
+        let gravity = screenSize == .auto ? videoGravity : screenSize.gravity
+        if playerLayer.videoGravity != gravity {
+            playerLayer.videoGravity = gravity
+        }
+        if self.screenSize != screenSize {
+            self.screenSize = screenSize
+            setNeedsLayout()
         }
     }
 }
@@ -1889,18 +1978,22 @@ public final class AVPlayerLayerUIView: UIView {
 public struct AVPlayerLayerRepresentable: UIViewRepresentable {
     public let player: AVPlayer
     public var videoGravity: AVLayerVideoGravity
+    public var screenSize: VideoScreenSize
     
-    public init(player: AVPlayer, videoGravity: AVLayerVideoGravity = .resizeAspect) {
+    public init(player: AVPlayer, videoGravity: AVLayerVideoGravity = .resizeAspect, screenSize: VideoScreenSize = .auto) {
         self.player = player
         self.videoGravity = videoGravity
+        self.screenSize = screenSize
     }
     
     public func makeUIView(context: Context) -> AVPlayerLayerUIView {
-        return AVPlayerLayerUIView(player: player, videoGravity: videoGravity)
+        let view = AVPlayerLayerUIView(player: player, videoGravity: videoGravity)
+        view.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
+        return view
     }
     
     public func updateUIView(_ uiView: AVPlayerLayerUIView, context: Context) {
-        uiView.update(player: player, videoGravity: videoGravity)
+        uiView.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
     }
 }
 #endif

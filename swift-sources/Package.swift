@@ -39,6 +39,7 @@ let package = Package(
                 "LibraryLifecycle.swift",
                 "VLCPlaybackRetirement.swift",
                 "IPTVPlaybackView.swift",
+                "VideoScreenSize.swift",
                 "Subtitles.swift",
                 "SubtitleController.swift",
                 "SubtitleControls.swift",
