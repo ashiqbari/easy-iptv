@@ -260,7 +260,20 @@ public struct ContentView: View {
     
     private var sidebarView: some View {
         VStack(spacing: 0) {
-            // Clean Segmented Section Switcher directly on top of Quick Access
+            HStack(spacing: 10) {
+                Image(systemName: "play.tv.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("EasyIPTV").font(.headline)
+                    Text("Your viewing library").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 18)
+            .padding(.bottom, 8)
+
             Picker("Section", selection: $manager.selectedSection) {
                 ForEach(M3UItem.ContentType.allCases, id: \.self) { section in
                     Label(section.rawValue, systemImage: section.iconName).tag(section)

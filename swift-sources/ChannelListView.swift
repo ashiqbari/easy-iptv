@@ -33,8 +33,14 @@ public struct ChannelListView: View {
                 .accessibilityLabel("Hide Channels")
                 .help("Show or hide only the channel sidebar")
                 .keyboardShortcut("2", modifiers: [.command, .shift])
-                Text("Channels (\(manager.filteredChannels.count))")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(manager.selectedSection.rawValue)
+                        .font(.title3.weight(.bold))
+                    Text("\(manager.selectedCategory) · \(manager.filteredChannels.count) items")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -139,10 +145,11 @@ public struct ChannelListView: View {
                             if category == "Favorites" || category == "★ Favorites" {
                                 Image(systemName: "star.fill")
                                     .font(.caption2)
-                                    .foregroundColor(isSelected ? .black : .yellow)
                                 Text("Favorites")
                                     .font(.subheadline.weight(isSelected ? .semibold : .regular))
                             } else {
+                                Image(systemName: category == "All" ? "square.grid.2x2" : "clock.arrow.circlepath")
+                                    .font(.caption2)
                                 Text(category)
                                     .font(.subheadline.weight(isSelected ? .semibold : .regular))
                             }
@@ -156,6 +163,7 @@ public struct ChannelListView: View {
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
             .padding(.horizontal)
@@ -168,14 +176,13 @@ public struct ChannelListView: View {
             #if os(macOS)
             // NSTableView measures inserted rows eagerly; All can exhaust SwiftUI's graph storage.
             ScrollView {
-                LazyVStack(spacing: 0) {
+                LazyVStack(spacing: 6) {
                     ForEach(manager.filteredChannels) { channel in
                         channelRow(channel)
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                        Divider().padding(.leading, 12)
                     }
                 }
+                .padding(.vertical, 10)
             }
             #else
             List(manager.filteredChannels) { channel in
@@ -221,7 +228,7 @@ public struct ChannelListView: View {
         VStack(spacing: 16) {
             ProgressView()
                 .scaleEffect(1.3)
-            Text("Loading Playlist…")
+            Text("Loading your library…")
                 .font(.headline)
                 .foregroundColor(.secondary)
         }
@@ -235,7 +242,7 @@ public struct ChannelListView: View {
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
             
-            Text(manager.selectedCategory == "Recently Watched" ? "Nothing Recently Watched" : "No Channels Found")
+            Text(manager.selectedCategory == "Recently Watched" ? "Nothing Recently Watched" : "Nothing Here Yet")
                 .font(.headline)
             
             if !manager.searchText.isEmpty {
@@ -254,7 +261,7 @@ public struct ChannelListView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
             } else if manager.selectedCategory == "Favorites" || manager.selectedCategory == "★ Favorites" {
-                Text("You haven't added any favorite channels yet. Tap the star icon on any channel to add it here.")
+                Text("Keep your go-to picks here. Select the star beside any item to save it.")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.center)
@@ -294,68 +301,63 @@ public struct ChannelRowView: View {
     let onToggleFavorite: () -> Void
     var subtitle: String? = nil
     
+    @State private var isHovered = false
+
     public var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 12) {
-                // Channel Logo
-                channelLogo
-                
-                // Channel Title & Metadata
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
+        HStack(spacing: 8) {
+            Button(action: onSelect) {
+                HStack(spacing: 12) {
+                    channelLogo
+                    VStack(alignment: .leading, spacing: 5) {
                         Text(channel.name)
                             .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(isPlaying ? .accentColor : .primary)
+                            .foregroundStyle(isPlaying ? Color.accentColor : Color.primary)
                             .lineLimit(2)
-                            .truncationMode(.tail)
+                            .multilineTextAlignment(.leading)
                             .fixedSize(horizontal: false, vertical: true)
-                        
-                        if isPlaying {
-                            Image(systemName: "waveform")
-                                .font(.caption.bold())
-                                .foregroundColor(.accentColor)
-                        }
-                    }
-                    
-                    HStack(spacing: 6) {
                         Text(subtitle ?? channel.displayGroup)
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
-                            .truncationMode(.tail)
-                        
-                        Text("•")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        
-                        Text(channel.isHLS ? "HLS" : "MP4")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Color.secondary.opacity(0.12))
-                            .cornerRadius(3)
+                        if isPlaying {
+                            Label("Now playing", systemImage: "waveform")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                        }
                     }
+                    Spacer(minLength: 0)
                 }
-                .layoutPriority(1)
-                
-                Spacer()
-                
-                // Favorite Star Button
-                Button(action: onToggleFavorite) {
-                    Image(systemName: channel.isFavorite ? "star.fill" : "star")
-                        .foregroundColor(channel.isFavorite ? .yellow : .secondary.opacity(0.6))
-                        .font(.body)
-                        .padding(6)
-                }
-                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityLabel(channel.name)
+            .accessibilityValue(subtitle ?? channel.displayGroup)
+            .accessibilityAddTraits(isPlaying ? .isSelected : [])
+
+            Button(action: onToggleFavorite) {
+                Image(systemName: channel.isFavorite ? "star.fill" : "star")
+                    .foregroundStyle(channel.isFavorite ? Color.orange : Color.secondary)
+                    .font(.body)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(channel.isFavorite ? "Remove from" : "Add to") Favorites: \(channel.name)")
+            .help(channel.isFavorite ? "Remove from Favorites" : "Add to Favorites")
         }
-        .buttonStyle(.plain)
+        .padding(10)
+        .background(
+            isPlaying ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(isHovered ? 0.1 : 0.04),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(isPlaying ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.1), lineWidth: 1)
+        }
+        .onHover { isHovered = $0 }
     }
-    
+
     private var channelLogo: some View {
         Group {
             if let logoURL = channel.logoURL {
@@ -372,7 +374,7 @@ public struct ChannelRowView: View {
                 fallbackLogo
             }
         }
-        .frame(width: 44, height: 44)
+        .frame(width: 48, height: 48)
         .background(Color.secondary.opacity(0.1))
         .cornerRadius(8)
         .overlay(
@@ -382,7 +384,7 @@ public struct ChannelRowView: View {
     }
     
     private var fallbackLogo: some View {
-        Image(systemName: "tv")
+        Image(systemName: channel.contentType.iconName)
             .foregroundColor(.secondary)
             .font(.system(size: 20))
     }

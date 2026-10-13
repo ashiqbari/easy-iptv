@@ -404,33 +404,27 @@ public struct IPTVPlaybackView: View {
             if let channel = manager.currentChannel {
                 if channel.contentType == .movie {
                     Button { manager.returnToMovie() } label: {
-                        Label("Back to Movie Details", systemImage: "chevron.left")
+                        Label("Back", systemImage: "chevron.left")
                     }
                     .buttonStyle(.plain)
                     .foregroundColor(.white)
                     .padding(10)
                     .background(Color.black.opacity(0.5))
                     .cornerRadius(8)
+                    .help("Return to movie details")
                 }
                 // Return to TV Series Overview Button
                 if channel.contentType == .series || manager.selectedSection == .series {
                     Button {
                         manager.returnToSeries()
                     } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.left.circle.fill")
-                                .font(.title3)
-                            Text("Back to Series Overview")
-                                .font(.subheadline.bold())
-                        }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 7)
-                        .background(Color.blue)
-                        .cornerRadius(8)
-                        .shadow(radius: 4)
+                        Label("Back", systemImage: "chevron.left")
                     }
                     .buttonStyle(.plain)
+                    .foregroundColor(.white)
+                    .padding(10)
+                    .background(Color.black.opacity(0.5))
+                    .cornerRadius(8)
                     .help("Return to Series Overview & Seasons")
                 }
                 
@@ -763,6 +757,7 @@ public struct IPTVPlaybackView: View {
             Picker("Aspect ratio", selection: $manager.screenSize) {
                 ForEach(VideoScreenSize.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
             }
+            .pickerStyle(.inline)
             Button("Reset to Auto") { manager.screenSize = .auto }
         } label: {
             Label(manager.screenSize.shortTitle, systemImage: "aspectratio")
@@ -939,10 +934,6 @@ public struct IPTVPlaybackView: View {
                 .ignoresSafeArea()
                 
                 VStack(alignment: .leading, spacing: 24) {
-                    Button { manager.dismissDetails() } label: {
-                        Label(manager.currentChannel == nil ? "Back to TV Shows" : "Back to Player", systemImage: "chevron.left")
-                    }
-                    .padding(.horizontal, 32)
                     if let channel = manager.seriesDetailsItem {
                         if let backdrop = manager.seriesDetails?.backdrop {
                             AsyncImage(url: backdrop) { image in
@@ -1274,26 +1265,44 @@ public struct IPTVPlaybackView: View {
 
     /// Placeholder state when no channel is selected.
     private var emptyPlaceholderView: some View {
-        VStack(spacing: 16) {
-            if let error = manager.errorMessage {
-                Text(error).foregroundStyle(.white).multilineTextAlignment(.center)
-                Button("Open Downloads") { manager.showingDownloads = true }.buttonStyle(.borderedProminent)
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.07, green: 0.12, blue: 0.19), .black],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            VStack(spacing: 24) {
+                Image(systemName: "play.tv.fill")
+                    .font(.system(size: 48, weight: .light))
+                    .foregroundStyle(.white)
+                    .frame(width: 112, height: 112)
+                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 28))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                    }
+                VStack(spacing: 10) {
+                    Text("Make time for a good watch.")
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Browse live TV, discover a movie, or settle into a series. Choose something from your library to begin.")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(maxWidth: 360)
+                }
+                Button { manager.showingPlaylistSheet = true } label: {
+                    Label("Add Source", systemImage: "plus.circle")
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                if let error = manager.errorMessage {
+                    Text(error).foregroundStyle(.white).multilineTextAlignment(.center)
+                    Button("Open Downloads") { manager.showingDownloads = true }
+                        .buttonStyle(.borderedProminent)
+                }
             }
-            Image(systemName: "play.tv")
-                .font(.system(size: 54))
-                .foregroundColor(.gray)
-            
-            Text("No Channel Playing")
-                .font(.title2.bold())
-                .foregroundColor(.white)
-            
-            Text("Select any channel from the list or load an M3U playlist to begin streaming.")
-                .font(.subheadline)
-                .multilineTextAlignment(.center)
-                .foregroundColor(.gray)
-                .frame(maxWidth: 360)
+            .multilineTextAlignment(.center)
+            .padding(32)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .padding()
     }
     
     /// Slide-in drawer for TV Series episodes browsing and selection.
@@ -1325,10 +1334,7 @@ public struct IPTVPlaybackView: View {
                 Button {
                     manager.returnToSeries()
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "chevron.left.circle.fill")
-                        Text("Back to Series Overview & Seasons")
-                    }
+                    Label("Back", systemImage: "chevron.left")
                     .font(.caption.bold())
                     .foregroundColor(.white)
                     .padding(.horizontal, 10)

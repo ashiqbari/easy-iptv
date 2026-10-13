@@ -106,10 +106,6 @@ struct MovieDetailsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Button { manager.dismissDetails() } label: {
-                    Label(manager.currentChannel == nil ? "Back to Movies" : "Back to Player", systemImage: "chevron.left")
-                }
-                    .buttonStyle(.plain)
                 if let backdrop = details?.backdrop, manager.downloads.isOnline {
                     AsyncImage(url: backdrop) { image in
                         image.resizable().scaledToFill()

@@ -29,6 +29,21 @@ final class AppearanceTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testCatalogCardsFitNarrowPanelsWithLongTitles() {
+        let item = M3UItem(name: "A long movie or channel name that should wrap without pushing the favorite control out of the panel",
+                           streamURL: URL(fileURLWithPath: "/private/tmp/catalog-layout.mp4"), contentType: .movie)
+        for playing in [false, true] {
+            let hosting = NSHostingController(rootView: ChannelRowView(channel: item, isPlaying: playing,
+                                                                       onSelect: {}, onToggleFavorite: {}))
+            for width in [260.0, 376.0] {
+                let size = hosting.sizeThatFits(in: CGSize(width: width, height: 600))
+                XCTAssertLessThanOrEqual(size.width, width)
+                XCTAssertGreaterThanOrEqual(size.height, 68)
+                XCTAssertLessThan(size.height, 150)
+            }
+        }
+    }
+
     func testAppearanceChangesKeepAVPlayerSurfaceMounted() async throws {
         try await checkAppearanceChanges(useVLC: false)
     }
