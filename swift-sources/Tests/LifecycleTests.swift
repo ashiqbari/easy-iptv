@@ -271,6 +271,33 @@ final class LifecycleTests: XCTestCase {
         XCTAssertNil(manager.player)
     }
 
+    @MainActor func testVLCChannelSwitchesReuseLibraryAndPreserveVolume() async throws {
+        let suite = "vlc-channel-switch-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let url = try await silentMedia()
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        let surface = VLCVideoSurfaceNSView()
+        defer {
+            manager.stop()
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: url)
+        }
+        manager.playbackVolume = 0.35
+        manager.playChannel(M3UItem(name: "First channel", streamURL: url, contentType: .live))
+        let library = try XCTUnwrap(manager.vlcPlayer?.libraryInstance)
+        for index in 0..<8 {
+            let previous = WeakReference(manager.vlcPlayer)
+            manager.playChannel(M3UItem(name: "Channel \(index)", streamURL: url, contentType: .live))
+            let player = try XCTUnwrap(manager.vlcPlayer)
+            XCTAssertTrue(player.libraryInstance === library)
+            surface.update(player: player, shouldPlay: true, screenSize: .auto)
+            try await waitUntil { manager.isPlaying && previous.value == nil }
+            manager.playbackVolume = 0.35
+            XCTAssertEqual(player.audio?.volume, 35)
+            XCTAssertEqual(defaults.float(forKey: "com.iptvplayer.playbackVolume"), 0.35)
+        }
+    }
+
     @MainActor func testVLCRetirementReleasesPlayerAndDrawableAfterManagerDeinit() async throws {
         var manager: IPTVPlayerManager? = IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: UUID().uuidString)!)
         let reference = WeakReference(manager)

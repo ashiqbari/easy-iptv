@@ -382,6 +382,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         didSet { cleanupVLCPlayer = vlcPlayer }
     }
     private var cleanupVLCPlayer: VLCMediaPlayer?
+    // App volume is persisted separately; VLC's volume saving can deadlock its global config lock during channel switches.
+    private static let playbackLibrary = VLCLibrary(options: ["--no-volume-save"])
     #endif
     
     // MARK: - Private Members
@@ -917,7 +919,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         removeTimeObserver()
         playerItemStatusObserver?.invalidate()
         playerTimeControlObserver?.invalidate()
-        let vlc = VLCMediaPlayer()
+        let vlc = VLCMediaPlayer(library: Self.playbackLibrary)
         vlc.delegate = self
         let localURL = downloads.localURL(for: item)
         if localURL == nil, !downloads.isOnline {
