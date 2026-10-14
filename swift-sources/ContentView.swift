@@ -106,6 +106,9 @@ public struct ContentView: View {
         .sheet(isPresented: $manager.showingAboutSheet) {
             aboutSheet
         }
+        .sheet(isPresented: $manager.showingSubscriptionInfo) {
+            SubscriptionInfoView(manager: manager).id(manager.subscriptionAccount)
+        }
         .onChange(of: manager.showingDownloads) { _, showing in
             guard !showing else { return }
             if let record = manager.pendingDownload {
@@ -269,6 +272,14 @@ public struct ContentView: View {
                     Text("Your viewing library").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button { manager.showingSubscriptionInfo = true } label: {
+                    Image(systemName: "calendar")
+                        .frame(width: 28, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Subscription Info")
+                .help("View subscription expiry and account status")
             }
             .padding(.horizontal, 16)
             .padding(.top, 18)

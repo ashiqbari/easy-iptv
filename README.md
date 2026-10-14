@@ -40,6 +40,12 @@ Use **Search categories** in the library sidebar to narrow category names in
 Live TV, Movies, or TV Shows. It is independent of channel search; All and
 Favorites stay available, and filtering categories does not change playback.
 
+Click the small **calendar button** beside EasyIPTV at the top of the category
+sidebar to check your provider's expiry date and account status. Successful results
+are saved locally and reused next time, including after restarting the app. Use
+**Refresh** inside the info sheet to check again; dates use your local time zone. Xtream Codes accounts and compatible M3U
+`get.php` links are supported; other playlists may not provide expiry information.
+
 ## Start watching
 
 1. Download the DMG from [GitHub Releases](https://github.com/ashiqbari/easy-iptv/releases/latest) and drag EasyIPTV into Applications.

@@ -243,6 +243,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Controls whether the About modal is visible.
     @Published public var showingAboutSheet: Bool = false
+    @Published var showingSubscriptionInfo = false
     
     /// Controls whether playback HUD overlays are shown over the video.
     @Published public var showVideoControls: Bool = true
@@ -1122,6 +1123,34 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         }
     }
     
+    var subscriptionAccount: SubscriptionAccount? {
+        guard playlistURLString != "Demo Public HLS Channels" else { return nil }
+        if let saved = storageDefaults.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String],
+           let server = saved["server"], !server.isEmpty,
+           let username = saved["username"], !username.isEmpty,
+           let password = saved["password"], !password.isEmpty {
+            return SubscriptionAccount(serverURL: server, username: username, password: password)
+        }
+        return storageDefaults.string(forKey: lastPlaylistKey).flatMap(SubscriptionAccount.init(playlistURL:))
+    }
+
+    func subscriptionInformation(for account: SubscriptionAccount, refresh: Bool = false) async throws -> SubscriptionInfo {
+        if !refresh, let data = storageDefaults.data(forKey: SubscriptionInfo.storageKey),
+           let saved = try? JSONDecoder().decode(SubscriptionInfo.self, from: data), saved.accountID == account.cacheID {
+            return saved
+        }
+        guard let userInfo = try await libraryLoader.account(account.serverURL, account.username, account.password).userInfo else {
+            throw XtreamCodesError.invalidResponse
+        }
+        try Task.checkCancellation()
+        let info = SubscriptionInfo(accountID: account.cacheID, status: userInfo.status,
+                                    expiryDate: userInfo.expiryDate, updatedAt: Date())
+        if subscriptionAccount == account {
+            storageDefaults.set(try JSONEncoder().encode(info), forKey: SubscriptionInfo.storageKey)
+        }
+        return info
+    }
+
     /// Tracks the media clock at 100 ms intervals for progress and sidecar subtitles.
     private func setupTimeObserver() {
         removeTimeObserver()
@@ -1376,7 +1405,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     var controlsAutoHideBlocked: Bool {
         !controlsInteractionHolds.isEmpty || subtitles.showingMenu || showingEpisodesDrawer || isSeeking
             || showingDownloads || showingEPGSheet || showingPlaylistSheet || showingAboutSheet
-            || showingResumeChoice || isViewingMovieDetails || isViewingSeriesDetails || errorMessage != nil
+            || showingSubscriptionInfo || showingResumeChoice || isViewingMovieDetails || isViewingSeriesDetails || errorMessage != nil
     }
 
     func setControlsInteraction(_ region: String, active: Bool) {
@@ -1657,6 +1686,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         self.reindexCategoriesAndChannels()
         libraryPersistence.clear()
         storageDefaults.removeObject(forKey: "com.iptvplayer.savedXtream")
+        storageDefaults.removeObject(forKey: SubscriptionInfo.storageKey)
     }
     
     private func persistFavorites() {

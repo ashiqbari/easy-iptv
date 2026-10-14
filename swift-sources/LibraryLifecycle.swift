@@ -3,6 +3,7 @@ import Foundation
 /// Injectable, stateless loading operations keep lifecycle tests off real providers.
 struct LibraryLoader: Sendable {
     typealias Fetch = @Sendable (String, String, String) async throws -> [M3UItem]
+    var account: @Sendable (String, String, String) async throws -> XtreamAuthResponse
     var live: Fetch
     var movies: Fetch
     var series: Fetch
@@ -10,6 +11,7 @@ struct LibraryLoader: Sendable {
     var playlist: @Sendable (URL) async throws -> [M3UItem]
 
     init(service: XtreamCodesManager = XtreamCodesManager(), parser: M3UParser = M3UParser()) {
+        account = { try await service.accountInformation(serverURL: $0, username: $1, password: $2) }
         live = { try await service.fetchLiveChannels(serverURL: $0, username: $1, password: $2) }
         movies = { try await service.fetchVodStreams(serverURL: $0, username: $1, password: $2) }
         series = { try await service.fetchSeries(serverURL: $0, username: $1, password: $2) }

@@ -49,6 +49,7 @@ let package = Package(
                 "ChannelListView.swift",
                 "MovieDetails.swift",
                 "ContentView.swift",
+                "SubscriptionInfo.swift",
                 "IPTVPlayerApp.swift"
             ],
             linkerSettings: [

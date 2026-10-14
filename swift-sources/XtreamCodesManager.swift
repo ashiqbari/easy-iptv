@@ -20,6 +20,37 @@ public struct XtreamUserInfo: Codable, Sendable {
     public let maxConnections: String?
     public let auth: Int?
     
+    var expiryDate: Date? {
+        guard let expDate, let seconds = Double(expDate), seconds.isFinite,
+              seconds > 0, seconds <= 253402300799 else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        func string(_ key: CodingKeys) -> String? {
+            (try? values.decode(String.self, forKey: key))
+                ?? (try? values.decode(Int.self, forKey: key)).map(String.init)
+        }
+        username = string(.username)
+        password = string(.password)
+        status = string(.status)
+        expDate = string(.expDate)
+        isTrial = string(.isTrial)
+        activeCons = string(.activeCons)
+        maxConnections = string(.maxConnections)
+        if let value = try? values.decode(Int.self, forKey: .auth) {
+            auth = value
+        } else if let text = try values.decodeIfPresent(String.self, forKey: .auth) {
+            guard let value = Int(text) else {
+                throw DecodingError.dataCorruptedError(forKey: .auth, in: values, debugDescription: "Invalid authentication status")
+            }
+            auth = value
+        } else {
+            auth = nil
+        }
+    }
+
     enum CodingKeys: String, CodingKey {
         case username
         case password
@@ -229,6 +260,15 @@ public actor XtreamCodesManager {
     
     /// Authenticates with the Xtream server and returns account/server information.
     public func authenticate(serverURL: String, username: String, password: String) async throws -> XtreamAuthResponse {
+        let response = try await accountInformation(serverURL: serverURL, username: username, password: password)
+        if let userInfo = response.userInfo, userInfo.auth == 0 && userInfo.status != "Active" {
+            throw XtreamCodesError.authenticationFailed("Account status is \(userInfo.status ?? "Inactive"). Please verify subscription.")
+        }
+        return response
+    }
+
+    /// Expired accounts can still report their expiry date and status.
+    public func accountInformation(serverURL: String, username: String, password: String) async throws -> XtreamAuthResponse {
         let cleanBase = sanitizeBaseURL(serverURL)
         guard let url = URL(string: "\(cleanBase)/player_api.php?username=\(urlEncoded(username))&password=\(urlEncoded(password))") else {
             throw XtreamCodesError.invalidServerURL
@@ -239,12 +279,8 @@ public actor XtreamCodesManager {
         
         do {
             let authResponse = try decoder.decode(XtreamAuthResponse.self, from: data)
-            guard let userInfo = authResponse.userInfo else {
+            guard authResponse.userInfo != nil else {
                 throw XtreamCodesError.authenticationFailed("Server returned an empty user profile.")
-            }
-            
-            if userInfo.auth == 0 && userInfo.status != "Active" {
-                throw XtreamCodesError.authenticationFailed("Account status is \(userInfo.status ?? "Inactive"). Please verify subscription.")
             }
             
             return authResponse
