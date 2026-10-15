@@ -122,6 +122,7 @@ public struct XtreamLiveStream: Codable, Sendable {
     public let categoryId: String?
     public let customSid: String?
     public let tvArchive: Int?
+    public let tvArchiveDuration: Int?
     public let directSource: String?
     
     enum CodingKeys: String, CodingKey {
@@ -135,6 +136,7 @@ public struct XtreamLiveStream: Codable, Sendable {
         case categoryId = "category_id"
         case customSid = "custom_sid"
         case tvArchive = "tv_archive"
+        case tvArchiveDuration = "tv_archive_duration"
         case directSource = "direct_source"
     }
     
@@ -148,7 +150,8 @@ public struct XtreamLiveStream: Codable, Sendable {
         self.added = try? container.decodeIfPresent(String.self, forKey: .added)
         self.categoryId = try? container.decodeIfPresent(String.self, forKey: .categoryId)
         self.customSid = try? container.decodeIfPresent(String.self, forKey: .customSid)
-        self.tvArchive = try? container.decodeIfPresent(Int.self, forKey: .tvArchive)
+        self.tvArchive = (try? container.decode(Int.self, forKey: .tvArchive)) ?? (try? container.decode(String.self, forKey: .tvArchive)).flatMap(Int.init)
+        self.tvArchiveDuration = (try? container.decode(Int.self, forKey: .tvArchiveDuration)) ?? (try? container.decode(String.self, forKey: .tvArchiveDuration)).flatMap(Int.init)
         self.directSource = try? container.decodeIfPresent(String.self, forKey: .directSource)
         
         if let idInt = try? container.decode(Int.self, forKey: .streamId) {
@@ -333,6 +336,10 @@ public actor XtreamCodesManager {
         let decoder = JSONDecoder()
         let rawStreams = try decoder.decode([XtreamLiveStream].self, from: streamData)
         
+        let zone: String?
+        if rawStreams.contains(where: { $0.tvArchive == 1 }) {
+            zone = try? await accountInformation(serverURL: serverURL, username: username, password: password).serverInfo?.timezone
+        } else { zone = nil }
         // 3. Transform to M3UItem
         return rawStreams.compactMap { stream in
             let categoryName = stream.categoryId.flatMap { categoryMap[$0] } ?? "Live Channels"
@@ -347,7 +354,9 @@ public actor XtreamCodesManager {
                 tvgID: stream.epgChannelId,
                 tvgName: stream.name,
                 isFavorite: false,
-                contentType: .live
+                contentType: .live,
+                catchup: stream.tvArchive == 1 && (stream.tvArchiveDuration ?? 0) > 0
+                    ? CatchupInfo(mode: "xc", days: stream.tvArchiveDuration ?? 0, source: nil, timezone: zone) : nil
             )
         }
     }

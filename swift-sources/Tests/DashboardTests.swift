@@ -179,7 +179,7 @@ final class DashboardTests: XCTestCase {
                 let labels = (toolbar.visibleItems ?? []).map(\.label)
                 if home {
                     XCTAssertTrue(searchFields(hosting).isEmpty, "Home must not contain category or channel sidebars")
-                    for label in ["Appearance", "Add Source", "Subscription Info", "Downloads"] {
+                    for label in ["Appearance", "Sources", "Subscription Info", "Downloads"] {
                         XCTAssertTrue(labels.contains(label), "Home must keep \(label) available")
                     }
                     XCTAssertFalse(labels.contains("Channels Sidebar"))

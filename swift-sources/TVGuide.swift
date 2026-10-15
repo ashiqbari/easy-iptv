@@ -78,6 +78,25 @@ actor TVGuide {
         return programs.filter { $0.end > now && $0.start < midnight }.sorted { $0.start < $1.start }
     }
 
+    func loadCatchup(for item: M3UItem) async throws -> [GuideProgram] {
+        guard item.catchup != nil else { throw GuideError.missingSource }
+        if let url = Self.channelRequest(for: item) {
+            do {
+                let file = try await download(url)
+                defer { try? FileManager.default.removeItem(at: file) }
+                let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size <= 8 * 1024 * 1024 else { throw GuideError.tooLarge }
+                let result = try Self.parseChannel(Data(contentsOf: file, options: .mappedIfSafe))
+                if !result.isEmpty { return result }
+            } catch { try Task.checkCancellation() }
+        }
+        guard let feed = Self.feedURL(for: item), let id = item.tvgID, !id.isEmpty else { throw GuideError.missingChannelID }
+        let file = try await download(feed)
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard let stream = InputStream(url: file) else { throw GuideError.invalidFeed }
+        return try Self.parse(XMLParser(stream: stream), channelID: id, now: nil)
+    }
+
     func load(for item: M3UItem) async throws -> [GuideProgram] {
         var channelError: Error?
         if let url = Self.channelRequest(for: item) {
@@ -328,7 +347,10 @@ final class XMLTVPrograms: NSObject, XMLParserDelegate {
                 if let receive {
                     do { try receive(currentChannel, program) }
                     catch { failure = error; parser.abortParsing() }
-                } else { programs.append(program) }
+                } else {
+                    guard programs.count < 10_000 else { failure = GuideError.tooLarge; parser.abortParsing(); return }
+                    programs.append(program)
+                }
             }
             selected = false; field = nil
         }

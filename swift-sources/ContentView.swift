@@ -118,6 +118,15 @@ public struct ContentView: View {
             }
         }
 
+        .sheet(isPresented: $manager.showingSources) {
+            SavedSourcesView(manager: manager, store: manager.sources)
+        }
+        .sheet(isPresented: $manager.showingOrganization) {
+            ChannelOrganizationView(manager: manager)
+        }
+        .sheet(item: $manager.catchupChannel) { channel in
+            CatchupView(channel: channel, manager: manager)
+        }
         .sheet(isPresented: $manager.showingPlaylistSheet) {
             playlistInputSheet.background(palette.background)
         }
@@ -138,6 +147,9 @@ public struct ContentView: View {
                 }
             }
         }
+        .alert("Source issue", isPresented: Binding(get: { manager.sources.error != nil }, set: { if !$0 { manager.sources.error = nil } })) {
+            Button("OK") { manager.sources.error = nil }
+        } message: { Text(manager.sources.error ?? "") }
         .alert("Download issue", isPresented: Binding(
             get: { manager.downloads.errorMessage != nil },
             set: { if !$0 { manager.downloads.errorMessage = nil } }
@@ -476,12 +488,15 @@ public struct ContentView: View {
             }
             .help("Choose System, Light, Dark, or Navy appearance")
 
-            Button {
-                manager.showingPlaylistSheet = true
+            Menu {
+                Button("Add Source…") { manager.showingPlaylistSheet = true }
+                Button("Saved Sources…") { manager.showingSources = true }
+                Divider()
+                Button("Organize Channels…") { manager.showingOrganization = true }
             } label: {
-                Label("Add Source", systemImage: "plus.circle.fill")
+                Label("Sources", systemImage: "tray.2.fill")
             }
-            .help("Add Xtream Codes API account or M3U playlist URL")
+            .help("Switch saved sources, add a provider, or organize channels")
 
             Button {
                 manager.showingAboutSheet = true

@@ -419,7 +419,10 @@ final class GuideSearchModelTests: XCTestCase {
         """)
         let index = GuideSearchIndex(url: root.appendingPathComponent("guide.sqlite"), download: { try await downloads.download($0) })
         let channel = M3UItem(name: "News", streamURL: URL(string: "https://provider.example/live/user/pass/1.ts")!, tvgID: "one", contentType: .live)
-        let downloadedAt = Date().addingTimeInterval(-10_000)
+        let now = Date()
+        // Keep the cached seed in today even when this test runs just after midnight.
+        let elapsedToday = now.timeIntervalSince(Calendar.current.startOfDay(for: now))
+        let downloadedAt = now.addingTimeInterval(-min(10_000, elapsedToday / 2))
         let seeded = try await index.refresh(channels: [channel], now: downloadedAt)
         let model = GuideSearchModel(index: index)
         defer { model.cancel() }

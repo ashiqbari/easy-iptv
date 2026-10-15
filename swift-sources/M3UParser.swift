@@ -160,10 +160,20 @@ public actor M3UParser {
             subtitleSources: extractAttribute(named: "subtitle-url", from: extInf)
                 .flatMap { URL(string: $0, relativeTo: streamURL)?.absoluteURL }
                 .map { [SubtitleSource(url: $0, label: extractAttribute(named: "subtitle-language", from: extInf) ?? "Subtitles")] },
-            guideURL: guideURL
+            guideURL: guideURL,
+            catchup: Self.catchupInfo(extInf)
         )
     }
     
+    private static func catchupInfo(_ line: String) -> CatchupInfo? {
+        guard let mode = extractAttribute(named: "catchup", from: line)?.lowercased(),
+              ["xc", "default", "append"].contains(mode),
+              let days = extractAttribute(named: "catchup-days", from: line).flatMap(Int.init), days > 0, days <= 365 else { return nil }
+        let source = extractAttribute(named: "catchup-source", from: line)
+        guard mode == "xc" || source?.isEmpty == false else { return nil }
+        return CatchupInfo(mode: mode, days: days, source: source, timezone: nil)
+    }
+
     /// Ultra-fast attribute extraction matching `attributeName="value"` or `attributeName='value'`
     /// without NSRegularExpression compilation overhead.
     private static func extractAttribute(named attributeName: String, from text: String) -> String? {

@@ -181,6 +181,18 @@ installation is required.
 
 </details>
 
+## Sources, audio, catch-up, and channel organization
+
+Open **Sources** in the toolbar to add a source, manage saved connections, or organize channels. Successful M3U and Xtream connections are saved automatically. Saved Sources lets you rename, reconnect, or remove them. Failed connections keep the previous library. Saved connection secrets are stored in the system Keychain; source names and selection are stored locally. The active account's legacy settings and cached stream URLs remain private app data, as before. Removing a saved connection keeps downloads and watch history.
+
+The **Audio tracks** waveform button beside subtitles lists the stream's native audio tracks in both AVKit and VLC. Choose a language or commentary track without restarting playback. Refresh tracks if the provider exposes them after playback begins. Streams with no alternate audio do not gain synthesized tracks.
+
+**Catch-up TV** is available from an eligible channel's context menu or its player controls. It loads actual past guide entries and offers Watch within the provider's advertised archive window. **Back to Live** returns to the original channel. Supported formats are Xtream channels advertising `tv_archive` and `tv_archive_duration`, and M3U entries with `catchup="xc"`, `catchup="default"`, or `catchup="append"`, a `catchup-days` value from 1 to 365, and a supported `catchup-source` where required. The supported template tokens are `{utc}`, `{utcend}`, `{lutc}`, `{duration}`, `{duration:60}`, `${start}`, `${end}`, `${duration}`, `${now}`, and `{Y}{m}{d}{H}{M}{S}`. Unknown templates are rejected rather than guessed. These follow the [IPTV Simple catch-up format conventions](https://github.com/kodi-pvr/pvr.iptvsimple#catchup-format-specifiers). Xtream requests use the provider's advertised server timezone, or UTC if omitted. Catch-up depends on actual archive availability and past listings; it does not record streams or create a local timeshift buffer.
+
+Interrupted HTTP streams retry up to three times with 2, 4, and 8 second delays. Buffering for 20 seconds also starts recovery. Movies resume at their saved clock position; live channels reconnect to live playback. Retries are canceled when paused, stopped, backgrounded, or replaced. Thirty seconds of stable playback resets the retry allowance; after exhaustion, use Try Again or choose another channel. Local downloaded media is not retried over the network.
+
+In **Sources → Organize Channels**, hide or restore channels/categories and order favorites with the up/down buttons. Use a channel's context menu to hide it. Hidden items stay out of the library and dashboard; organization does not delete source media, downloads, or history. Organization settings persist locally using hashed channel identities.
+
 ## Build & run
 
 From the repository root:

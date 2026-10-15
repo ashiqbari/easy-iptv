@@ -212,6 +212,8 @@ public struct ChannelListView: View {
             subtitle: episodeLabel
         )
         .contextMenu {
+            if channel.catchup != nil { Button("Catch-up TV…") { manager.catchupChannel = channel } }
+            Button("Hide Channel") { manager.setChannelHidden(channel, hidden: true) }
             if isRecent {
                 Button("Remove from Recently Watched") { manager.removeRecentlyWatched(channel) }
             }
@@ -309,6 +311,10 @@ public struct ChannelRowView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                        if channel.catchup != nil {
+                            Label("Catch-up available", systemImage: "clock.arrow.circlepath")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                         if isPlaying {
                             Label("Now playing", systemImage: "waveform")
                                 .font(.caption2.weight(.semibold))

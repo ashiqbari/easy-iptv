@@ -51,6 +51,10 @@ let package = Package(
                 "ContentView.swift",
                 "DashboardView.swift",
                 "SubscriptionInfo.swift",
+                "SavedSources.swift",
+                "ChannelOrganization.swift",
+                "AudioTracks.swift",
+                "CatchupTV.swift",
                 "IPTVPlayerApp.swift"
             ],
             linkerSettings: [

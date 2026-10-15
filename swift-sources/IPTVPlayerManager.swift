@@ -72,11 +72,35 @@ private final class DisplaySleepManager: @unchecked Sendable {
 @MainActor
 public final class IPTVPlayerManager: NSObject, ObservableObject {
     let subtitles = SubtitleController()
+    let audioTracks = AudioTrackController()
+    let sources: SavedSourceStore
+    @Published var showingSources = false
+    @Published var showingOrganization = false
+    @Published var catchupChannel: M3UItem?
+    @Published private(set) var catchupOrigin: M3UItem?
+    @Published var organization = ChannelOrganization() {
+        didSet {
+            if let data = try? JSONEncoder().encode(organization) { storageDefaults.set(data, forKey: "com.iptvplayer.organization.v1") }
+            rebuildDashboard()
+            reindexCategoriesAndChannels()
+        }
+    }
+    @Published private(set) var recoveryMessage: String?
+    private var recoveryTask: Task<Void, Never>?
+    private var stallTask: Task<Void, Never>?
+    private var stablePlaybackTask: Task<Void, Never>?
+    private var playbackGeneration = UUID()
+    private(set) var recoveryAttempts = 0
     let progressStore: PlaybackProgressStore
     let recentlyWatchedStore: RecentlyWatchedStore
     let guideIndex = GuideSearchIndex()
     @Published var guideRevision = UUID()
     private var libraryItemsByKey: [String: M3UItem] = [:]
+    private var visibleChannelIDs: Set<UUID> = []
+    private var channelKeysByID: [UUID: String] = [:]
+    private var categoryKeysByID: [UUID: String] = [:]
+    private var categoryKeysBySection: [M3UItem.ContentType: [String: Set<String>]] = [:]
+    private var organizationCategoryItems: [M3UItem.ContentType: [M3UItem]] = [:]
     private(set) var dashboardCounts: [M3UItem.ContentType: Int] = [:]
     private(set) var dashboardFavorites: [M3UItem] = []
     private var recordedCurrentPlayback = false
@@ -118,13 +142,25 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public private(set) var channels: [M3UItem] = [] {
         didSet {
             libraryItemsByKey = [:]
-            dashboardCounts = [:]
-            dashboardFavorites = []
+            categoryKeysByID = [:]; categoryKeysBySection = [:]; organizationCategoryItems = [:]
+            var categoryHashes: [String: String] = [:]
+            var itemKeys: [UUID: String] = [:]
             for item in channels {
-                libraryItemsByKey[PlaybackProgressStore.key(for: item)] = item
-                dashboardCounts[item.contentType, default: 0] += 1
-                if item.isFavorite { dashboardFavorites.append(item) }
+                let key = channelKeysByID[item.id] ?? PlaybackProgressStore.key(for: item)
+                libraryItemsByKey[key] = item; itemKeys[item.id] = key
+                let identity = ChannelOrganization.categoryIdentity(item)
+                let categoryKey = categoryHashes[identity] ?? ChannelOrganization.categoryKey(item)
+                categoryHashes[identity] = categoryKey; categoryKeysByID[item.id] = categoryKey
+                if categoryKeysBySection[item.contentType]?[item.groupTitle] == nil {
+                    organizationCategoryItems[item.contentType, default: []].append(item)
+                }
+                categoryKeysBySection[item.contentType, default: [:]][item.groupTitle, default: []].insert(categoryKey)
             }
+            channelKeysByID = itemKeys
+            for section in M3UItem.ContentType.allCases {
+                organizationCategoryItems[section]?.sort { $0.groupTitle < $1.groupTitle }
+            }
+            rebuildDashboard()
         }
     }
     
@@ -205,12 +241,21 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 disableDisplaySleepPrevention()
             }
             #endif
-            if oldValue != isPlaying { notePlayerActivity() }
+            if oldValue != isPlaying {
+                notePlayerActivity()
+                if isPlaying { markStablePlayback() }
+                else { stablePlaybackTask?.cancel() }
+            }
         }
     }
     
     /// Stream buffer state indicator.
-    @Published public var isBuffering: Bool = false
+    @Published public var isBuffering: Bool = false {
+        didSet {
+            if isBuffering && !oldValue { watchForStall() }
+            else if !isBuffering { stallTask?.cancel() }
+        }
+    }
     
     /// The URL string of the loaded playlist.
     @Published public var playlistURLString: String = ""
@@ -434,6 +479,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     // MARK: - Initialization
     
     public override init() {
+        sources = SavedSourceStore(defaults: .standard)
         downloads = DownloadManager.shared
         progressStore = PlaybackProgressStore()
         recentlyWatchedStore = RecentlyWatchedStore()
@@ -445,10 +491,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         observeProgress()
         loadPersistedState()
         setupAudioSessionIfAvailable()
+        migrateActiveSource()
     }
 
     /// Isolated storage and no automatic playlist playback for lifecycle tests.
     init(progressDefaults: UserDefaults, libraryLoader: LibraryLoader = LibraryLoader(), cacheURL: URL? = nil, downloads: DownloadManager? = nil) {
+        sources = SavedSourceStore(defaults: progressDefaults, secure: false)
         self.downloads = downloads ?? DownloadManager(root: FileManager.default.temporaryDirectory.appendingPathComponent("EasyIPTVDownloadsTests-\(UUID())"),
             configuration: .ephemeral, monitorNetwork: false, subtitleFetch: { $0.subtitleSources ?? [] })
         progressStore = PlaybackProgressStore(defaults: progressDefaults)
@@ -463,6 +511,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func observeProgress() {
+        if let data = storageDefaults.data(forKey: "com.iptvplayer.organization.v1"),
+           let saved = try? JSONDecoder().decode(ChannelOrganization.self, from: data) { organization = saved }
+        audioTracks.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        sources.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         progressStore.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         downloads.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         downloads.$deleting.sink { [weak self] ids in
@@ -473,6 +525,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     deinit {
+        recoveryTask?.cancel()
+        stallTask?.cancel()
+        stablePlaybackTask?.cancel()
         foregroundLibraryTask?.cancel()
         backgroundLibraryTask?.cancel()
         seriesLoadTask?.cancel()
@@ -507,7 +562,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         var favCount = 0
         var secTotal = 0
         
-        for channel in channels where channel.contentType == selectedSection {
+        for channel in channels where channel.contentType == selectedSection && visibleChannelIDs.contains(channel.id) {
             secTotal += 1
             let grp = channel.displayGroup
             counts[grp, default: 0] += 1
@@ -528,13 +583,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Instant 0ms filtering when switching category or typing search queries.
     public func updateFilteredChannelsOnly() {
-        var result = channels.filter { $0.contentType == selectedSection }
+        var result = channels.filter { $0.contentType == selectedSection && visibleChannelIDs.contains($0.id) }
         
         // 1. Category Filtering
         if selectedCategory == "Recently Watched" {
-            result = recentlyWatchedChannels
+            result = recentlyWatchedChannels.filter { visibleChannelIDs.contains($0.id) }
         } else if selectedCategory == "Favorites" || selectedCategory == "★ Favorites" {
-            result = result.filter { favoriteStreamURLs.contains($0.streamURL.absoluteString) }
+            result = organization.orderedFavorites(result.filter { favoriteStreamURLs.contains($0.streamURL.absoluteString) }, key: organizationKey)
         } else if selectedCategory != "All" {
             result = result.filter { $0.displayGroup == selectedCategory }
         }
@@ -570,7 +625,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Fetches and parses an M3U/M3U8 playlist from a web URL.
     /// - Parameter urlString: Remote HTTP/HTTPS URL string.
-    public func loadPlaylist(from urlString: String) async {
+    public func loadPlaylist(from urlString: String, saveSource: Bool = true) async {
         guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)),
               url.scheme == "http" || url.scheme == "https" else {
             self.errorMessage = "Please enter a valid HTTP or HTTPS playlist URL."
@@ -583,14 +638,14 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         foregroundLibraryTask = task
         self.isLoading = true
         self.errorMessage = nil
-        self.playlistURLString = urlString
-        
         do {
             let parsedChannels = try await withTaskCancellationHandler {
                 try await task.value
             } onCancel: { task.cancel() }
             guard acceptLibraryResponse(generation) else { return }
             
+            self.playlistURLString = urlString
+            if saveSource { rememberSource(.playlist(url.absoluteString)) }
             // Map favorites onto newly parsed channels
             self.channels = parsedChannels.map { item in
                 var updated = item
@@ -622,15 +677,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     ///   - serverURL: Server base address (e.g. "http://domain.com:8080").
     ///   - username: User account username.
     ///   - password: User account password.
-    public func loadXtream(serverURL: String, username: String, password: String) async {
+    public func loadXtream(serverURL: String, username: String, password: String, saveSource: Bool = true) async {
         let generation = beginLibraryLoad()
         let loader = libraryLoader
         let task = Task { try await loader.live(serverURL, username, password) }
         foregroundLibraryTask = task
         self.isLoading = true
         self.errorMessage = nil
-        self.playlistURLString = "Xtream: \(username)"
-        
         do {
             // Step 1: Immediately fetch Live Channels so user can watch without 30s delay
             let live = try await withTaskCancellationHandler {
@@ -643,6 +696,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 return updated
             }
             
+            self.playlistURLString = "Xtream: \(username)"
+            if saveSource { rememberSource(.xtream(server: serverURL, username: username, password: password)) }
             self.channels = mappedLive
             self.selectedSection = .live
             self.selectedCategory = "All"
@@ -706,12 +761,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     var dashboardRecentChannels: [M3UItem] {
         Array(recentlyWatchedStore.records.filter { $0.contentType == .live }
-            .compactMap { libraryItemsByKey[$0.libraryKey] })
+            .compactMap { libraryItemsByKey[$0.libraryKey] }.filter { visibleChannelIDs.contains($0.id) })
     }
 
     var dashboardContinueWatching: [DashboardResumeItem] {
         Array(recentlyWatchedStore.records.compactMap { record -> DashboardResumeItem? in
-            guard record.contentType != .live, let item = libraryItemsByKey[record.libraryKey],
+            guard record.contentType != .live, let item = libraryItemsByKey[record.libraryKey], visibleChannelIDs.contains(item.id),
                   let progress = progressStore.records[record.episodeKey], progress.resumePosition != nil else { return nil }
             return DashboardResumeItem(item: item, progress: progress, season: record.season, episode: record.episode)
         }.sorted { $0.progress.updatedAt > $1.progress.updatedAt })
@@ -751,7 +806,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     func recordPlaybackStarted() {
-        guard wantsPlayback, isPlaying, !recordedCurrentPlayback, let item = currentChannel else { return }
+        guard wantsPlayback, isPlaying, !recordedCurrentPlayback, let item = currentChannel, item.isCatchup != true else { return }
         recordedCurrentPlayback = true
         recentlyWatchedStore.record(item, series: playingSeries?.item)
         updateFilteredChannelsOnly()
@@ -863,8 +918,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     #endif
 
-    private func playDirectStream(_ item: M3UItem, useVLC: Bool, position: Double? = nil, preservingDetails: Bool = false) {
+    private func playDirectStream(_ item: M3UItem, useVLC: Bool, position: Double? = nil, preservingDetails: Bool = false, recoveryAttempt: Int = 0) {
+        let archiveOrigin = item.isCatchup == true ? catchupOrigin : nil
         tearDownPlayback(nextItem: item)
+        catchupOrigin = archiveOrigin
+        recoveryAttempts = recoveryAttempt
         recordedCurrentPlayback = false
         resumeRequest = nil
         pendingResumePosition = position.flatMap { $0 > 0 ? $0 : nil }
@@ -915,6 +973,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             AVURLAssetPreferPreciseDurationAndTimingKey: false
         ])
         let playerItem = AVPlayerItem(asset: asset)
+        audioTracks.configure(playerItem)
         if item.isVOD {
             subtitles.configure(item: playerItem, provider: subtitleProvider(for: item), offlineSources: localURL == nil ? nil : (downloads.record(for: item)?.subtitles ?? []))
         }
@@ -963,6 +1022,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         }
         vlc.media = VLCMedia(url: localURL ?? item.streamURL)
         vlcPlayer = vlc
+        audioTracks.configure(vlc)
         if item.isVOD {
             subtitles.configure(player: vlc, provider: subtitleProvider(for: item), offlineSources: localURL == nil ? nil : (downloads.record(for: item)?.subtitles ?? []))
         }
@@ -1086,6 +1146,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     /// Saves the actual engine clock before destroying its item and observers.
     private func tearDownPlayback(nextItem: M3UItem? = nil) {
+        cancelStreamRecovery()
+        audioTracks.reset()
+        catchupOrigin = nil
         if nextItem == nil { controlsInteractionHolds.removeAll() }
         cancelControlsAutoHide()
         saveProgress(force: true)
@@ -1119,6 +1182,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     /// Explicitly hiding/backgrounding the app pauses without discarding the surface.
     func pauseForBackground() {
+        cancelStreamRecovery()
         saveProgress(force: true)
         wantsPlayback = false
         player?.pause()
@@ -1144,15 +1208,16 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Re-syncs and refreshes the current Xtream Codes server or M3U playlist to fetch updated channels.
     public func refreshPlaylist() async {
+        // Refresh library data without reading or rewriting saved connections in Keychain.
         if !playlistURLString.hasPrefix("Xtream:"),
            let savedURL = storageDefaults.string(forKey: lastPlaylistKey), !savedURL.isEmpty,
            !savedURL.hasPrefix("Xtream:") {
-            await loadPlaylist(from: savedURL)
+            await loadPlaylist(from: savedURL, saveSource: false)
         } else if let saved = storageDefaults.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String],
            let server = saved["server"], let user = saved["username"], let pass = saved["password"], !server.isEmpty {
-            await loadXtream(serverURL: server, username: user, password: pass)
+            await loadXtream(serverURL: server, username: user, password: pass, saveSource: false)
         } else if let savedURL = storageDefaults.string(forKey: lastPlaylistKey), !savedURL.isEmpty {
-            await loadPlaylist(from: savedURL)
+            await loadPlaylist(from: savedURL, saveSource: false)
         }
     }
     
@@ -1202,6 +1267,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     var playbackBadge: String? {
         guard let channel = currentChannel else { return nil }
+        if channel.isCatchup == true { return "Catch-up TV" }
         var liveOffset: Double?
         if !useVLCPlayback, let item = player?.currentItem,
            item.status == .readyToPlay, item.duration.isIndefinite {
@@ -1340,9 +1406,19 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func togglePlayPause() {
         guard !isViewingSeriesDetails, resumeRequest == nil, pendingResumePosition == nil,
               currentChannel != nil else { return }
-        wantsPlayback = !isPlaying
+        let wasReconnecting = recoveryTask != nil
+        cancelStreamRecovery()
+        wantsPlayback = wasReconnecting ? false : !isPlaying
         if wantsPlayback { playbackFinished = false }
         if !wantsPlayback { saveProgress(force: true) }
+        if wasReconnecting {
+            player?.pause()
+            #if os(macOS)
+            vlcPlayer?.pause()
+            #endif
+            isPlaying = false; isBuffering = false
+            return
+        }
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer {
             if isPlaying {
@@ -1436,7 +1512,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     var controlsAutoHideBlocked: Bool {
-        !controlsInteractionHolds.isEmpty || subtitles.showingMenu || showingEpisodesDrawer || isSeeking
+        !controlsInteractionHolds.isEmpty || audioTracks.showingMenu || showingSources || showingOrganization || catchupChannel != nil || subtitles.showingMenu || showingEpisodesDrawer || isSeeking
             || showingDownloads || showingEPGSheet || showingPlaylistSheet || showingAboutSheet
             || showingSubscriptionInfo || showingResumeChoice || isViewingMovieDetails || isViewingSeriesDetails || errorMessage != nil
     }
@@ -1500,6 +1576,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func subtitleProvider(for item: M3UItem) -> () async throws -> [SubtitleSource] {
+        if item.isCatchup == true { return { [] } }
         if downloads.localURL(for: item) != nil {
             let sources = downloads.record(for: item)?.subtitles ?? []
             return { sources }
@@ -1521,6 +1598,157 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         playDirectStream(record.item)
     }
     
+    private func rebuildDashboard() {
+        dashboardCounts = [:]; dashboardFavorites = []
+        visibleChannelIDs.removeAll(keepingCapacity: true)
+        for item in channels where !organization.hidden.contains(channelKeysByID[item.id] ?? "")
+            && !organization.hiddenCategories.contains(categoryKeysByID[item.id] ?? "") {
+            visibleChannelIDs.insert(item.id)
+            dashboardCounts[item.contentType, default: 0] += 1
+            if item.isFavorite { dashboardFavorites.append(item) }
+        }
+        dashboardFavorites = organization.orderedFavorites(dashboardFavorites, key: organizationKey)
+    }
+
+    func organizationKey(_ item: M3UItem) -> String {
+        channelKeysByID[item.id] ?? ChannelOrganization.key(item)
+    }
+    func organizationCategoryKey(_ item: M3UItem) -> String {
+        categoryKeysByID[item.id] ?? ChannelOrganization.categoryKey(item)
+    }
+    func organizationCategories(in section: M3UItem.ContentType) -> [M3UItem] {
+        organizationCategoryItems[section] ?? []
+    }
+    func setChannelHidden(_ item: M3UItem, hidden: Bool) {
+        if hidden { organization.hidden.insert(organizationKey(item)) }
+        else { organization.hidden.remove(organizationKey(item)) }
+    }
+    func setCategoryHidden(_ item: M3UItem, hidden: Bool) {
+        let keys = categoryKeysBySection[item.contentType]?[item.groupTitle] ?? [organizationCategoryKey(item)]
+        var updated = organization
+        if hidden { updated.hiddenCategories.formUnion(keys) }
+        else { updated.hiddenCategories.subtract(keys) }
+        organization = updated
+    }
+    func moveFavorite(_ item: M3UItem, before other: M3UItem) {
+        var order = organization.orderedFavorites(channels.filter { isFavorite($0) }, key: organizationKey).map(organizationKey)
+        let key = organizationKey(item)
+        guard key != organizationKey(other), order.contains(key) else { return }
+        order.removeAll { $0 == key }
+        guard let index = order.firstIndex(of: organizationKey(other)) else { return }
+        order.insert(key, at: index); organization.favoriteOrder = order
+    }
+
+    func switchSource(_ id: UUID) async {
+        do {
+            let connection = try sources.connection(id)
+            switch connection {
+            case .playlist(let url): await loadPlaylist(from: url)
+            case .xtream(let server, let username, let password): await loadXtream(serverURL: server, username: username, password: password)
+            }
+            if sources.activeID == id, errorMessage == nil { showingSources = false }
+        } catch { sources.error = "Could not read this connection from Keychain. Unlock Keychain or add the source again." }
+    }
+    private var legacySourceConnection: SourceConnection? {
+        if let saved = storageDefaults.dictionary(forKey: "com.iptvplayer.savedXtream") as? [String: String],
+           let server = saved["server"], let user = saved["username"], let password = saved["password"] {
+            return .xtream(server: server, username: user, password: password)
+        }
+        if let url = storageDefaults.string(forKey: lastPlaylistKey),
+           let parsed = URL(string: url), ["http", "https"].contains(parsed.scheme?.lowercased() ?? "") {
+            return .playlist(parsed.absoluteString)
+        }
+        return nil
+    }
+    private func rememberSource(_ connection: SourceConnection) {
+        let previous = sources.activeID.flatMap { try? sources.connection($0) } ?? legacySourceConnection
+        if let previous, previous != connection {
+            stop(); catchupChannel = nil; showingDashboard = true
+        }
+        sources.save(connection)
+    }
+    private func migrateActiveSource() {
+        guard sources.sources.isEmpty, !storageDefaults.bool(forKey: "com.iptvplayer.sources.v1.migrated"),
+              let connection = legacySourceConnection else { return }
+        sources.save(connection)
+    }
+
+    func playCatchup(_ channel: M3UItem, program: GuideProgram) {
+        guard channel.contentType == .live, let url = channel.catchup?.url(for: channel, program: program) else {
+            errorMessage = "This programme is outside the provider's catch-up window or uses an unsupported archive format."
+            return
+        }
+        let archived = M3UItem(name: "\(channel.name) · \(program.title)", logoURL: channel.logoURL,
+                              streamURL: url, contentType: .movie, isCatchup: true)
+        catchupOrigin = channel
+        showingDashboard = false
+        continueWatching(archived)
+        catchupOrigin = channel
+    }
+    func returnToLive() {
+        guard let original = catchupOrigin else { return }
+        playChannel(original)
+    }
+
+    private func cancelStreamRecovery() {
+        playbackGeneration = UUID()
+        recoveryTask?.cancel(); recoveryTask = nil
+        stallTask?.cancel(); stallTask = nil
+        stablePlaybackTask?.cancel(); stablePlaybackTask = nil
+        recoveryMessage = nil; recoveryAttempts = 0
+    }
+    private func watchForStall() {
+        stallTask?.cancel()
+        let generation = playbackGeneration
+        stallTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled, let self, self.playbackGeneration == generation, self.wantsPlayback, self.isBuffering else { return }
+            self.recoverStream()
+        }
+    }
+    private func markStablePlayback() {
+        stablePlaybackTask?.cancel()
+        recoveryMessage = nil
+        let generation = playbackGeneration
+        stablePlaybackTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard !Task.isCancelled, let self, self.playbackGeneration == generation, self.isPlaying else { return }
+            self.recoveryAttempts = 0
+        }
+    }
+    nonisolated static func recoveryDelay(after attempts: Int) -> UInt64? {
+        guard (0..<3).contains(attempts) else { return nil }
+        return UInt64(2 << attempts) * 1_000_000_000
+    }
+    func recoverStream() {
+        guard recoveryTask == nil, wantsPlayback, let channel = currentChannel,
+              ["http", "https"].contains(channel.streamURL.scheme?.lowercased() ?? ""), downloads.localURL(for: channel) == nil else { return }
+        guard let delay = Self.recoveryDelay(after: recoveryAttempts) else {
+            recoveryMessage = nil; isBuffering = false; isPlaying = false
+            errorMessage = "Could not reconnect after three attempts. Try again or choose another channel."
+            return
+        }
+        let generation = playbackGeneration
+        let attempt = recoveryAttempts + 1
+        let useVLC = useVLCPlayback
+        let position = channel.contentType == .live ? nil : (pendingResumePosition ?? playbackPosition())
+        let details = isViewingMovieDetails || isViewingSeriesDetails
+        recoveryMessage = "Reconnecting… attempt \(attempt) of 3"
+        errorMessage = nil
+        recoveryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled, let self, self.playbackGeneration == generation,
+                  self.wantsPlayback, self.currentChannel?.id == channel.id else { return }
+            self.recoveryTask = nil
+            self.playDirectStream(channel, useVLC: useVLC, position: position, preservingDetails: details, recoveryAttempt: attempt)
+            self.recoveryMessage = "Reconnecting… attempt \(attempt) of 3"
+        }
+    }
+    func retryCurrentStream() {
+        guard let channel = currentChannel else { return }
+        playDirectStream(channel, useVLC: useVLCPlayback, position: channel.isVOD ? playbackPosition() : nil)
+    }
+
     // MARK: - Favorites Management
     
     /// Toggles favorite status for a given channel and persists the updated set.
@@ -1563,6 +1791,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 guard let self, self.player?.currentItem === playerItem, !self.useVLCPlayback else { return }
                 self.saveProgress(force: true, completed: true)
                 self.playbackFinished = true
+                if self.currentChannel?.contentType == .live, self.wantsPlayback { self.recoverStream(); return }
                 self.wantsPlayback = false
                 self.isPlaying = false
             }
@@ -1601,13 +1830,17 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 case .failed:
 #if os(macOS)
                     if !self.useVLCPlayback, self.currentChannel != nil {
-                        self.playCurrentStreamWithVLC()
+                        if let channel = self.currentChannel {
+                            self.playDirectStream(channel, useVLC: true, position: self.pendingResumePosition ?? self.playbackPosition(),
+                                preservingDetails: self.isViewingMovieDetails || self.isViewingSeriesDetails, recoveryAttempt: self.recoveryAttempts)
+                        }
                         return
                     }
 #endif
                     self.isBuffering = false
                     self.isPlaying = false
                     self.errorMessage = Self.playbackErrorDescription(for: item)
+                    self.recoverStream()
                 case .unknown:
                     self.isBuffering = true
                 @unknown default:
@@ -1760,13 +1993,16 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
             if state == .error {
                 self.isBuffering = false
                 self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
+                self.recoverStream()
             } else if state == .playing {
                 self.applyPendingVLCResume(player)
                 self.recordPlaybackStarted()
                 if !self.wantsPlayback { player.pause() }
                 if self.errorMessage != nil { self.errorMessage = nil }
                 self.subtitles.nativePlayerDidStart()
+                if self.audioTracks.showingMenu { self.audioTracks.refresh() }
             } else if state == .ended {
+                if self.currentChannel?.contentType == .live, self.wantsPlayback { self.recoverStream(); return }
                 self.saveProgress(force: true, completed: true)
                 self.playbackFinished = true
                 self.wantsPlayback = false

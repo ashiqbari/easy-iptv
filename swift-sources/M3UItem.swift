@@ -63,6 +63,8 @@ public struct M3UItem: Identifiable, Hashable, Codable, Sendable {
     public let episodeNumber: Int?
     public let subtitleSources: [SubtitleSource]?
     public let guideURL: URL?
+    public let catchup: CatchupInfo?
+    public let isCatchup: Bool?
 
     /// The stream URL scopes IDs to their provider/account and distinguishes M3U episodes.
     public var subtitleCacheKey: String {
@@ -87,7 +89,9 @@ public struct M3UItem: Identifiable, Hashable, Codable, Sendable {
         seasonNumber: Int? = nil,
         episodeNumber: Int? = nil,
         subtitleSources: [SubtitleSource]? = nil,
-        guideURL: URL? = nil
+        guideURL: URL? = nil,
+        catchup: CatchupInfo? = nil,
+        isCatchup: Bool? = nil
     ) {
         self.id = id
         let cleanName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -106,6 +110,8 @@ public struct M3UItem: Identifiable, Hashable, Codable, Sendable {
         self.episodeNumber = episodeNumber
         self.subtitleSources = subtitleSources
         self.guideURL = guideURL
+        self.catchup = catchup
+        self.isCatchup = isCatchup
         
         // Auto-detect content classification if not explicitly provided
         if let explicit = contentType {

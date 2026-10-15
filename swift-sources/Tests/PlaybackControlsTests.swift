@@ -109,7 +109,7 @@ final class PlaybackControlsTests: XCTestCase {
         defer { manager.stop() }
         let blockers: [ReferenceWritableKeyPath<IPTVPlayerManager, Bool>] = [
             \.showingEpisodesDrawer, \.showingDownloads, \.showingEPGSheet,
-            \.showingPlaylistSheet, \.showingAboutSheet, \.showingSubscriptionInfo, \.showingResumeChoice, \.isSeeking
+            \.showingSources, \.showingOrganization, \.showingPlaylistSheet, \.showingAboutSheet, \.showingSubscriptionInfo, \.showingResumeChoice, \.isSeeking
         ]
         for key in blockers {
             manager[keyPath: key] = true
@@ -118,6 +118,10 @@ final class PlaybackControlsTests: XCTestCase {
             XCTAssertFalse(manager.playbackCursorHidden)
             manager[keyPath: key] = false
         }
+        manager.audioTracks.showingMenu = true
+        manager.hideControlsIfIdle()
+        XCTAssertTrue(manager.showVideoControls)
+        manager.audioTracks.showingMenu = false
         manager.subtitles.showingMenu = true
         manager.hideControlsIfIdle()
         XCTAssertTrue(manager.showVideoControls)

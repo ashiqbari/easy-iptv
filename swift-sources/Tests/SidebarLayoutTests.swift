@@ -66,7 +66,7 @@ final class SidebarLayoutTests: XCTestCase {
                 XCTAssertEqual(window.contentLayoutRect.maxY, headerBoundary, accuracy: 1,
                                "Toggling Channels must not move or resize the window header")
                 let toolbar = try XCTUnwrap(window.toolbar)
-                for label in ["Appearance", "Add Source", "About", "Channels Sidebar", "Search TV Guide", "Refresh Library", "Downloads"] {
+                for label in ["Appearance", "Sources", "About", "Channels Sidebar", "Search TV Guide", "Refresh Library", "Downloads"] {
                     let item = try XCTUnwrap(toolbar.visibleItems?.first { $0.label == label },
                                              "\(label) must remain visible in the header")
                     XCTAssertTrue(item.isEnabled)

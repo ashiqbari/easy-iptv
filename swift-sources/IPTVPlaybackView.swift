@@ -403,7 +403,11 @@ public struct IPTVPlaybackView: View {
     private var topBar: some View {
         HStack(alignment: .center, spacing: 12) {
             if let channel = manager.currentChannel {
-                if channel.contentType == .movie {
+                if manager.catchupOrigin != nil {
+                    Button { manager.returnToLive() } label: { Label("Back to Live", systemImage: "dot.radiowaves.left.and.right") }
+                        .buttonStyle(.bordered).foregroundStyle(.white)
+                }
+                if channel.contentType == .movie, channel.isCatchup != true {
                     Button { manager.returnToMovie() } label: {
                         Label("Back", systemImage: "chevron.left")
                     }
@@ -507,6 +511,13 @@ public struct IPTVPlaybackView: View {
                     .help("Live TV Electronic Program Schedule (EPG)")
                 }
                 
+                if channel.catchup != nil {
+                    Button { manager.catchupChannel = channel } label: { Label("Catch-up", systemImage: "clock.arrow.circlepath") }
+                        .buttonStyle(.bordered).foregroundStyle(.white)
+                }
+                if let message = manager.recoveryMessage {
+                    Text(message).font(.caption).foregroundStyle(.white)
+                }
                 // Playback engine selector
                 #if os(macOS)
                 Menu {
@@ -748,6 +759,7 @@ public struct IPTVPlaybackView: View {
             .help("Browse & Play TV Series Episodes")
         }
 
+        AudioTrackControl(manager: manager, controller: manager.audioTracks)
         if manager.currentChannel?.isVOD == true {
             SubtitleControls(manager: manager, controller: manager.subtitles)
         }
@@ -857,7 +869,7 @@ public struct IPTVPlaybackView: View {
             ProgressView()
                 .progressViewStyle(CircularProgressViewStyle(tint: .white))
                 .scaleEffect(1.4)
-            Text("Buffering stream…")
+            Text(manager.recoveryMessage ?? "Buffering stream…")
                 .font(.footnote)
                 .foregroundColor(.white.opacity(0.8))
         }
@@ -882,6 +894,8 @@ public struct IPTVPlaybackView: View {
                 .multilineTextAlignment(.center)
                 .foregroundColor(.white.opacity(0.85))
                 .frame(maxWidth: 340)
+
+            Button("Try Again") { manager.retryCurrentStream() }.buttonStyle(.borderedProminent)
 
             #if os(macOS)
             Button {
