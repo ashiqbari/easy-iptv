@@ -165,10 +165,31 @@ final class DashboardTests: XCTestCase {
             let original = try XCTUnwrap(surface(hosting))
             let player = manager.player
             let vlcPlayer = manager.vlcPlayer
+            let categoriesVisible = manager.showsCategoriesSidebar
+            let channelsVisible = manager.showsChannelsSidebar
+            func searchFields(_ view: NSView) -> [NSTextField] {
+                if let field = view as? NSTextField, field.placeholderString?.hasPrefix("Search") == true { return [field] }
+                return view.subviews.flatMap { searchFields($0) }
+            }
             for home in [true, false, true, false] {
                 manager.showingDashboard = home
                 window.setContentSize(home ? CGSize(width: 720, height: 500) : CGSize(width: 1320, height: 820))
                 try await settle()
+                let toolbar = try XCTUnwrap(window.toolbar)
+                let labels = (toolbar.visibleItems ?? []).map(\.label)
+                if home {
+                    XCTAssertTrue(searchFields(hosting).isEmpty, "Home must not contain category or channel sidebars")
+                    for label in ["Appearance", "Add Source", "Subscription Info", "Downloads"] {
+                        XCTAssertTrue(labels.contains(label), "Home must keep \(label) available")
+                    }
+                    XCTAssertFalse(labels.contains("Channels Sidebar"))
+                    XCTAssertFalse(labels.contains("Search TV Guide"))
+                } else {
+                    XCTAssertEqual(searchFields(hosting).count, 2)
+                    XCTAssertTrue(labels.contains("Home"), "The library needs a toolbar route back to Home")
+                }
+                XCTAssertEqual(manager.showsCategoriesSidebar, categoriesVisible)
+                XCTAssertEqual(manager.showsChannelsSidebar, channelsVisible)
                 XCTAssertTrue(surface(hosting) === original)
                 XCTAssertTrue(manager.player === player)
                 XCTAssertTrue(manager.vlcPlayer === vlcPlayer)

@@ -91,7 +91,9 @@ public struct ContentView: View {
                     if manager.showingDashboard {
                         NavigationStack {
                             DashboardView(manager: manager)
-                                .toolbar { Button("Browse Library") { manager.browse(manager.selectedSection) } }
+                                .toolbar {
+                                    ToolbarItemGroup(placement: .primaryAction) { homeToolbarControls }
+                                }
                         }
                     }
                 }
@@ -206,7 +208,17 @@ public struct ContentView: View {
         // two-column form instead of asking .detailOnly to hide both sidebars.
         // The player lives outside either split, so changing this chrome never
         // recreates its rendering surface.
-        if manager.showsChannelsSidebar && !manager.showingDashboard {
+        if manager.showingDashboard {
+            NavigationStack {
+                DashboardView(manager: manager)
+                    .background(playbackBoundsReader)
+                    .toolbar {
+                        ToolbarItemGroup(placement: .primaryAction) { homeToolbarControls }
+                    }
+            }
+            .toolbarBackground(palette.background, for: .windowToolbar)
+            .toolbarBackground(palette.navy ? .visible : .automatic, for: .windowToolbar)
+        } else if manager.showsChannelsSidebar {
             NavigationSplitView(columnVisibility: categoriesVisibility) {
                 sidebarView
                     .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
@@ -233,21 +245,19 @@ public struct ContentView: View {
     }
 
     private var playbackPlaceholder: some View {
-        Group {
-            if manager.showingDashboard { DashboardView(manager: manager) }
-            else { Color.black }
-        }
+        Color.black
             .toolbar {
+                ToolbarItem(placement: .navigation) {
+                    Button { manager.showingDashboard = true } label: {
+                        Label("Home", systemImage: "house")
+                    }
+                    .help("Return to Home")
+                }
                 ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        if manager.showingDashboard {
-                            manager.browse(manager.selectedSection)
-                            if !manager.showsChannelsSidebar { manager.toggleChannelsSidebar() }
-                        } else { manager.toggleChannelsSidebar() }
-                    } label: {
+                    Button { manager.toggleChannelsSidebar() } label: {
                         Label("Channels Sidebar", systemImage: "sidebar.right")
                     }
-                    .help(manager.showsChannelsSidebar && !manager.showingDashboard ? "Hide the channel sidebar" : "Show the channel sidebar")
+                    .help(manager.showsChannelsSidebar ? "Hide the channel sidebar" : "Show the channel sidebar")
                     .keyboardShortcut("2", modifiers: [.command, .shift])
 
                     if manager.selectedSection == .live {
@@ -260,12 +270,14 @@ public struct ContentView: View {
                     DownloadHeaderControls(manager: manager, downloads: manager.downloads)
                 }
             }
-            .background {
-                GeometryReader { geometry in
-                    Color.clear.preference(key: PlaybackBoundsPreferenceKey.self,
-                                           value: geometry.frame(in: .named("libraryPlayback")))
-                }
-            }
+            .background(playbackBoundsReader)
+    }
+
+    private var playbackBoundsReader: some View {
+        GeometryReader { geometry in
+            Color.clear.preference(key: PlaybackBoundsPreferenceKey.self,
+                                   value: geometry.frame(in: .named("libraryPlayback")))
+        }
     }
     #endif
 
@@ -315,19 +327,6 @@ public struct ContentView: View {
             .padding(.horizontal, 16)
             .padding(.top, 18)
             .padding(.bottom, 8)
-
-            Button { manager.showingDashboard = true } label: {
-                Label("Home", systemImage: "square.grid.2x2.fill")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(Color.teal.opacity(manager.showingDashboard ? 0.18 : 0.06), in: RoundedRectangle(cornerRadius: 10))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.teal)
-            .accessibilityAddTraits(manager.showingDashboard ? .isSelected : [])
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
 
             Picker("Section", selection: Binding(get: { manager.showingDashboard ? nil : manager.selectedSection }, set: { section in
                 if let section { manager.browse(section) }
@@ -463,26 +462,43 @@ public struct ContentView: View {
         .background(palette.background)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Menu {
-                    AppearancePicker()
-                } label: {
-                    Label("Appearance", systemImage: "circle.lefthalf.filled")
-                }
-                .help("Choose System, Light, Dark, or Navy appearance")
-
-                Button {
-                    manager.showingPlaylistSheet = true
-                } label: {
-                    Label("Add Source", systemImage: "plus.circle.fill")
-                }
-                .help("Add Xtream Codes API account or M3U playlist URL")
-                
-                Button {
-                    manager.showingAboutSheet = true
-                } label: {
-                    Label("About", systemImage: "info.circle")
-                }
+                libraryToolbarControls
             }
+        }
+    }
+
+    private var libraryToolbarControls: some View {
+        Group {
+            Menu {
+                AppearancePicker()
+            } label: {
+                Label("Appearance", systemImage: "circle.lefthalf.filled")
+            }
+            .help("Choose System, Light, Dark, or Navy appearance")
+
+            Button {
+                manager.showingPlaylistSheet = true
+            } label: {
+                Label("Add Source", systemImage: "plus.circle.fill")
+            }
+            .help("Add Xtream Codes API account or M3U playlist URL")
+
+            Button {
+                manager.showingAboutSheet = true
+            } label: {
+                Label("About", systemImage: "info.circle")
+            }
+        }
+    }
+
+    private var homeToolbarControls: some View {
+        Group {
+            libraryToolbarControls
+            Button { manager.showingSubscriptionInfo = true } label: {
+                Label("Subscription Info", systemImage: "calendar")
+            }
+            .help("View subscription expiry and account status")
+            DownloadHeaderControls(manager: manager, downloads: manager.downloads)
         }
     }
 
