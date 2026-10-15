@@ -25,15 +25,8 @@ public struct ChannelListView: View {
     public var body: some View {
         VStack(spacing: 0) {
             #if os(macOS)
-            // Panel chrome belongs below the window toolbar, not in its button row.
+            // Keep the section heading below the window toolbar.
             HStack(spacing: 12) {
-                Button { manager.toggleChannelsSidebar() } label: {
-                    Image(systemName: "sidebar.right")
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Hide Channels")
-                .help("Show or hide only the channel sidebar")
-                .keyboardShortcut("2", modifiers: [.command, .shift])
                 VStack(alignment: .leading, spacing: 3) {
                     Text(manager.selectedSection.rawValue)
                         .font(.title3.weight(.bold))

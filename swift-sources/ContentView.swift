@@ -225,20 +225,6 @@ public struct ContentView: View {
                     .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
             } detail: {
                 playbackPlaceholder
-                    .toolbar {
-                        ToolbarItem(placement: .navigation) {
-                            Button {
-                                if manager.showingDashboard {
-                                    manager.browse(manager.selectedSection)
-                                    if !manager.showsChannelsSidebar { manager.toggleChannelsSidebar() }
-                                } else { manager.toggleChannelsSidebar() }
-                            } label: {
-                                Label("Show Channels", systemImage: "sidebar.right")
-                            }
-                            .help("Show the channel sidebar")
-                            .keyboardShortcut("2", modifiers: [.command, .shift])
-                        }
-                    }
             }
             .navigationSplitViewStyle(.balanced)
             .toolbarBackground(palette.background, for: .windowToolbar)
@@ -253,6 +239,17 @@ public struct ContentView: View {
         }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        if manager.showingDashboard {
+                            manager.browse(manager.selectedSection)
+                            if !manager.showsChannelsSidebar { manager.toggleChannelsSidebar() }
+                        } else { manager.toggleChannelsSidebar() }
+                    } label: {
+                        Label("Channels Sidebar", systemImage: "sidebar.right")
+                    }
+                    .help(manager.showsChannelsSidebar && !manager.showingDashboard ? "Hide the channel sidebar" : "Show the channel sidebar")
+                    .keyboardShortcut("2", modifiers: [.command, .shift])
+
                     if manager.selectedSection == .live {
                         Button { showingGuideSearch = true } label: {
                             Label("Search TV Guide", systemImage: "text.magnifyingglass")

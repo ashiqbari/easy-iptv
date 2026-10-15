@@ -57,7 +57,7 @@ final class SidebarLayoutTests: XCTestCase {
             try await settle()
             let headerBoundary = window.contentLayoutRect.maxY
             let headerFrames = Dictionary(uniqueKeysWithValues: (window.toolbar?.items ?? []).compactMap { item -> (String, CGRect)? in
-                guard ["Search TV Guide", "Refresh Library", "Downloads"].contains(item.label), let view = item.view else { return nil }
+                guard ["Channels Sidebar", "Search TV Guide", "Refresh Library", "Downloads"].contains(item.label), let view = item.view else { return nil }
                 return (item.label, view.convert(view.bounds, to: nil))
             })
             for showing in [true, false, true, false, true] {
@@ -66,7 +66,7 @@ final class SidebarLayoutTests: XCTestCase {
                 XCTAssertEqual(window.contentLayoutRect.maxY, headerBoundary, accuracy: 1,
                                "Toggling Channels must not move or resize the window header")
                 let toolbar = try XCTUnwrap(window.toolbar)
-                for label in ["Appearance", "Add Source", "About", "Search TV Guide", "Refresh Library", "Downloads"] {
+                for label in ["Appearance", "Add Source", "About", "Channels Sidebar", "Search TV Guide", "Refresh Library", "Downloads"] {
                     let item = try XCTUnwrap(toolbar.visibleItems?.first { $0.label == label },
                                              "\(label) must remain visible in the header")
                     XCTAssertTrue(item.isEnabled)
@@ -79,6 +79,9 @@ final class SidebarLayoutTests: XCTestCase {
                         }
                     }
                 }
+                let labels = (toolbar.visibleItems ?? []).map(\.label)
+                XCTAssertLessThan(try XCTUnwrap(labels.firstIndex(of: "Channels Sidebar")),
+                                  try XCTUnwrap(labels.firstIndex(of: "Search TV Guide")))
                 let fields = searchFields(hosting)
                 let channelSearch = fields.first { $0.placeholderString == "Search in Live TV..." }
                 XCTAssertEqual(channelSearch != nil, showing)
