@@ -18,14 +18,48 @@ final class DownloadAppDelegate: NSObject, UIApplicationDelegate {
 
 enum AppearancePreference: String, CaseIterable {
     static let storageKey = "appearance"
-    case system, light, dark
+    case system, light, dark, navy
 
     var colorScheme: ColorScheme? {
         switch self {
         case .system: return nil
         case .light: return .light
-        case .dark: return .dark
+        case .dark, .navy: return .dark
         }
+    }
+}
+
+struct AppPalette {
+    var navy = false
+    var background: Color {
+        if navy { return Color(red: 0.035, green: 0.06, blue: 0.12) }
+        #if os(macOS)
+        return Color(nsColor: .windowBackgroundColor)
+        #else
+        return Color(uiColor: .systemBackground)
+        #endif
+    }
+    var surface: Color {
+        if navy { return Color(red: 0.075, green: 0.11, blue: 0.18) }
+        #if os(macOS)
+        return Color(nsColor: .controlBackgroundColor)
+        #else
+        return Color(uiColor: .secondarySystemBackground)
+        #endif
+    }
+    var playbackBackground: Color { navy ? background : .black }
+    var controlAccent: Color { navy ? Color(red: 0.02, green: 0.42, blue: 0.46) : .blue }
+    var accent: Color { navy ? Color(red: 0.12, green: 0.72, blue: 0.78) : .blue }
+}
+
+private struct AppPaletteKey: EnvironmentKey {
+    static let defaultValue = AppPalette()
+}
+
+extension EnvironmentValues {
+    var appPalette: AppPalette {
+        get { self[AppPaletteKey.self] }
+        set { self[AppPaletteKey.self] = newValue }
     }
 }
 
@@ -91,7 +125,7 @@ struct IPTVPlayerApp: App {
         WindowGroup {
             ContentView(manager: manager)
                 #if os(macOS)
-                .frame(minWidth: 1000, minHeight: 650)
+                .frame(minWidth: 720, minHeight: 500)
                 .onAppear {
                     appDelegate.manager = manager
                 }

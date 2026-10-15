@@ -77,6 +77,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     let guideIndex = GuideSearchIndex()
     @Published var guideRevision = UUID()
     private var libraryItemsByKey: [String: M3UItem] = [:]
+    private(set) var dashboardCounts: [M3UItem.ContentType: Int] = [:]
+    private(set) var dashboardFavorites: [M3UItem] = []
     private var recordedCurrentPlayback = false
     let downloads: DownloadManager
     @Published var showingDownloads = false
@@ -116,7 +118,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public private(set) var channels: [M3UItem] = [] {
         didSet {
             libraryItemsByKey = [:]
-            for item in channels { libraryItemsByKey[PlaybackProgressStore.key(for: item)] = item }
+            dashboardCounts = [:]
+            dashboardFavorites = []
+            for item in channels {
+                libraryItemsByKey[PlaybackProgressStore.key(for: item)] = item
+                dashboardCounts[item.contentType, default: 0] += 1
+                if item.isFavorite { dashboardFavorites.append(item) }
+            }
         }
     }
     
@@ -211,6 +219,14 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Navigation split view visibility state.
     @Published public var columnVisibility: NavigationSplitViewVisibility = .all
+    @Published var showingDashboard = true
+
+    func browse(_ section: M3UItem.ContentType) {
+        selectedSection = section
+        selectedCategory = "All"
+        searchText = ""
+        showingDashboard = false
+    }
     // Desktop panes are independent; fullscreen temporarily hides navigation
     // without overwriting the user's choices for either pane.
     @Published public private(set) var showsCategoriesSidebar = true
@@ -591,7 +607,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             self.isLoading = false
             
             // Auto-play the first channel if none is currently selected
-            if let first = self.filteredChannels.first ?? self.channels.first, self.currentChannel == nil {
+            if let first = self.filteredChannels.first ?? self.channels.first, self.currentChannel == nil, !self.showingDashboard {
                 self.playChannel(first)
             }
         } catch {
@@ -642,7 +658,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             
             self.isLoading = false
             
-            if let first = self.filteredChannels.first ?? self.channels.first, self.currentChannel == nil {
+            if let first = self.filteredChannels.first ?? self.channels.first, self.currentChannel == nil, !self.showingDashboard {
                 self.playChannel(first)
             }
             
@@ -681,12 +697,25 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         self.reindexCategoriesAndChannels()
         self.playlistURLString = "Demo Public HLS Channels"
         
-        if let first = self.filteredChannels.first ?? self.channels.first {
+        if let first = self.filteredChannels.first ?? self.channels.first, !self.showingDashboard {
             self.playChannel(first)
         }
     }
     
     // MARK: - Playback Control
+
+    var dashboardRecentChannels: [M3UItem] {
+        Array(recentlyWatchedStore.records.filter { $0.contentType == .live }
+            .compactMap { libraryItemsByKey[$0.libraryKey] })
+    }
+
+    var dashboardContinueWatching: [DashboardResumeItem] {
+        Array(recentlyWatchedStore.records.compactMap { record -> DashboardResumeItem? in
+            guard record.contentType != .live, let item = libraryItemsByKey[record.libraryKey],
+                  let progress = progressStore.records[record.episodeKey], progress.resumePosition != nil else { return nil }
+            return DashboardResumeItem(item: item, progress: progress, season: record.season, episode: record.episode)
+        }.sorted { $0.progress.updatedAt > $1.progress.updatedAt })
+    }
 
     var recentlyWatchedChannels: [M3UItem] {
         recentlyWatchedStore.records.filter { $0.contentType == selectedSection }
@@ -709,6 +738,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     func playRecentlyWatched(_ item: M3UItem) {
+        showingDashboard = false
         guard let record = recentlyWatchedRecord(for: item) else { return }
         if item.contentType == .series {
             fetchAndShowSeries(item, recentEpisodeKey: record.episodeKey)
@@ -730,6 +760,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Opens movie/series details, or begins playback for a live channel.
     /// - Parameter item: The target channel or show.
     public func playChannel(_ item: M3UItem) {
+        showingDashboard = false
         if item.contentType == .movie {
             showMovieDetails(item)
             return
@@ -794,6 +825,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func requestPlayback(_ item: M3UItem, useVLC: Bool) {
+        showingDashboard = false
         tearDownPlayback(nextItem: item)
         resumeRequest = nil
         if item.isVOD, let position = progressStore.progress(for: item)?.resumePosition {
@@ -818,6 +850,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     func continueWatching(_ item: M3UItem) {
+        showingDashboard = false
         let position = progressStore.progress(for: item)?.resumePosition
         playDirectStream(item, useVLC: false, position: position)
     }
@@ -1663,7 +1696,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                         return updated
                     }
                     self.reindexCategoriesAndChannels()
-                    if let first = self.filteredChannels.first ?? self.channels.first {
+                    if let first = self.filteredChannels.first ?? self.channels.first, !self.showingDashboard {
                         self.playChannel(first)
                     }
                 }
@@ -1682,6 +1715,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         self.stop()
         self.channels = []
         self.currentChannel = nil
+        self.showingDashboard = true
         self.playlistURLString = ""
         self.reindexCategoriesAndChannels()
         libraryPersistence.clear()

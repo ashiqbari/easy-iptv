@@ -34,6 +34,7 @@ final class SearchTests: XCTestCase {
         manager.searchText = "Fixture"
         let player = manager.player
         #if os(macOS)
+        manager.showingDashboard = false
         let hosting = NSHostingView(rootView: ContentView(manager: manager))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = hosting
@@ -127,6 +128,7 @@ final class SearchTests: XCTestCase {
         let player = try XCTUnwrap(manager.player)
         let filtered = manager.filteredChannels.map(\.id)
         #if os(macOS)
+        manager.showingDashboard = false
         let hosting = NSHostingView(rootView: ContentView(manager: manager))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false; window.contentView = hosting

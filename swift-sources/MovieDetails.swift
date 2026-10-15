@@ -96,6 +96,7 @@ struct MediaDetails: Codable, Sendable {
 }
 
 struct MovieDetailsView: View {
+    @Environment(\.appPalette) private var palette
     let item: M3UItem
     @ObservedObject var manager: IPTVPlayerManager
     @State private var details: MediaDetails?
@@ -142,7 +143,7 @@ struct MovieDetailsView: View {
         }
         .foregroundStyle(.primary)
         .background(LinearGradient(colors: [.orange.opacity(0.2), .clear], startPoint: .top, endPoint: .bottom))
-        .background(.background)
+        .background(palette.background)
         .task(id: "\(item.subtitleCacheKey)|\(retry)") {
             details = nil
             loading = true

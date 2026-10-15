@@ -11,6 +11,7 @@ import SwiftUI
 /// favorite toggling, and visual indicators for currently playing streams.
 public struct ChannelListView: View {
     
+    @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
     #if !os(macOS)
     @State private var showingGuideSearch = false
@@ -103,6 +104,7 @@ public struct ChannelListView: View {
                 channelListContent
             }
         }
+        .background(palette.surface)
         #if !os(macOS)
         .navigationTitle("Channels (\(manager.filteredChannels.count))")
         .sheet(isPresented: $showingGuideSearch) { GuideSearchView(manager: manager) }
@@ -159,7 +161,7 @@ public struct ChannelListView: View {
                         .background(
                             isSelected ? Color.accentColor : Color.secondary.opacity(0.15)
                         )
-                        .foregroundColor(isSelected ? .white : .primary)
+                        .foregroundColor(isSelected ? (palette.navy ? .black : .white) : .primary)
                         .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
@@ -283,13 +285,8 @@ public struct ChannelListView: View {
         .padding()
     }
     
-    private var categoryBarBackground: Color {
-        #if os(iOS)
-        return Color(uiColor: .secondarySystemBackground)
-        #else
-        return Color(nsColor: .windowBackgroundColor)
-        #endif
-    }
+    private var categoryBarBackground: Color { palette.background }
+
 }
 
 // MARK: - Channel Row Subview

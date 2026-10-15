@@ -43,6 +43,7 @@ extension SubscriptionAccount {
 }
 
 struct SubscriptionInfoView: View {
+    @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
     @Environment(\.dismiss) private var dismiss
     @State private var info: SubscriptionInfo?
@@ -110,6 +111,7 @@ struct SubscriptionInfoView: View {
         #else
         .presentationDetents([.medium, .large])
         #endif
+        .background(palette.background)
         .task(id: retry) {
             guard let account = manager.subscriptionAccount else { loading = false; return }
             loading = true

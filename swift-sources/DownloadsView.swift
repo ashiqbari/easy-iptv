@@ -159,6 +159,7 @@ struct DownloadHeaderControls: View {
 }
 
 struct DownloadsDialog: View {
+    @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
     @ObservedObject var downloads: DownloadManager
 
@@ -175,7 +176,7 @@ struct DownloadsDialog: View {
                     .accessibilityHidden(true)
                 DownloadsView(manager: manager, downloads: downloads)
                     .frame(width: Self.size(in: geometry.size).width, height: Self.size(in: geometry.size).height)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                    .background(palette.surface, in: RoundedRectangle(cornerRadius: 12))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .shadow(radius: 20)
                     .contentShape(Rectangle())
@@ -187,6 +188,7 @@ struct DownloadsDialog: View {
 }
 
 struct DownloadsView: View {
+    @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
     @ObservedObject var downloads: DownloadManager
     @State private var confirmingAll = false
@@ -256,6 +258,7 @@ struct DownloadsView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Downloads")
+        .background(palette.background)
         .onAppear { closeFocused = true }
         #if os(macOS)
         .focusSection()

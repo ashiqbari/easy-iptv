@@ -49,6 +49,7 @@ let package = Package(
                 "ChannelListView.swift",
                 "MovieDetails.swift",
                 "ContentView.swift",
+                "DashboardView.swift",
                 "SubscriptionInfo.swift",
                 "IPTVPlayerApp.swift"
             ],

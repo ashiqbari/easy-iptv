@@ -237,6 +237,10 @@ configuration instead of silently replacing it.
 - `.githooks/` — Versioned pre-commit hook and installer.
 - `.github/workflows/release.yml` — macOS DMG build and GitHub Release workflow.
 
+### Home dashboard
+
+The app opens on Home without automatically playing a channel. Continue Watching resumes unfinished movies and the last watched episode of a series. Recent Channels and Favorites offer quick access, and the Live TV, Movies, and Series cards open the full library. Empty sections stay hidden until you start watching or add favorites. Live cards show current programme details when available in the local TV guide cache; opening Home does not fetch guide data. Dashboard rows resize with the window and provide scrollbars and previous/next buttons for browsing the full saved history and favorites. Choose Navy in Appearance to apply the navy and teal palette across the library, details, player controls, and dialogs. System, Light, and Dark remain available. The dashboard adapts to the selected appearance, and the Home button in the sidebar returns to it during playback.
+
 ## License
 
 The application is licensed under the MIT License; see [LICENSE](LICENSE). The macOS VLC playback dependency is licensed under LGPL 2.1; its license is included at [swift-sources/LICENSE-LGPL-2.1](swift-sources/LICENSE-LGPL-2.1) and copied into the app bundle.

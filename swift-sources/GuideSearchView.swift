@@ -115,6 +115,7 @@ final class GuideSearchModel: ObservableObject {
 }
 
 struct GuideSearchView: View {
+    @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
     @StateObject private var model: GuideSearchModel
     @Environment(\.dismiss) private var dismiss
@@ -201,6 +202,7 @@ struct GuideSearchView: View {
                 }
             }
             .padding()
+            .background(palette.background)
             .navigationTitle("Search TV Guide")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }

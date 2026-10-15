@@ -42,6 +42,7 @@ public struct ContentView: View {
     // MARK: - State Management
     
     @ObservedObject var manager: IPTVPlayerManager
+    private var palette: AppPalette { AppPalette(navy: appearance == .navy) }
     @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
     #if os(macOS)
     @State private var playbackBounds: CGRect = .zero
@@ -71,6 +72,9 @@ public struct ContentView: View {
                         .frame(width: bounds.width, height: bounds.height)
                         .clipped()
                         .position(x: bounds.midX, y: bounds.midY)
+                        .opacity(manager.showingDashboard && !manager.isFullscreen ? 0 : 1)
+                        .allowsHitTesting(!manager.showingDashboard || manager.isFullscreen)
+                        .accessibilityHidden(manager.showingDashboard && !manager.isFullscreen)
                 }
                 .coordinateSpace(name: "libraryPlayback")
                 .onPreferenceChange(PlaybackBoundsPreferenceKey.self) { bounds in
@@ -79,7 +83,18 @@ public struct ContentView: View {
             }
 #else
             if !manager.isFullscreen {
-                navigationSplitView
+                ZStack {
+                    navigationSplitView
+                        .opacity(manager.showingDashboard ? 0 : 1)
+                        .allowsHitTesting(!manager.showingDashboard)
+                        .accessibilityHidden(manager.showingDashboard)
+                    if manager.showingDashboard {
+                        NavigationStack {
+                            DashboardView(manager: manager)
+                                .toolbar { Button("Browse Library") { manager.browse(manager.selectedSection) } }
+                        }
+                    }
+                }
             } else {
                 IPTVPlaybackView(manager: manager)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -100,11 +115,12 @@ public struct ContentView: View {
                 DownloadsDialog(manager: manager, downloads: manager.downloads)
             }
         }
+
         .sheet(isPresented: $manager.showingPlaylistSheet) {
-            playlistInputSheet
+            playlistInputSheet.background(palette.background)
         }
         .sheet(isPresented: $manager.showingAboutSheet) {
-            aboutSheet
+            aboutSheet.background(palette.background)
         }
         .sheet(isPresented: $manager.showingSubscriptionInfo) {
             SubscriptionInfoView(manager: manager).id(manager.subscriptionAccount)
@@ -153,12 +169,15 @@ public struct ContentView: View {
             switch preference {
             case .system: NSApplication.shared.appearance = nil
             case .light: NSApplication.shared.appearance = NSAppearance(named: .aqua)
-            case .dark: NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+            case .dark, .navy: NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
             }
         }
         #else
         .preferredColorScheme(appearance.colorScheme)
         #endif
+        .tint(AppPalette(navy: appearance == .navy).controlAccent)
+        .accentColor(AppPalette(navy: appearance == .navy).accent)
+        .environment(\.appPalette, AppPalette(navy: appearance == .navy))
     }
 
     private static var backgroundNotification: Notification.Name {
@@ -187,7 +206,7 @@ public struct ContentView: View {
         // two-column form instead of asking .detailOnly to hide both sidebars.
         // The player lives outside either split, so changing this chrome never
         // recreates its rendering surface.
-        if manager.showsChannelsSidebar {
+        if manager.showsChannelsSidebar && !manager.showingDashboard {
             NavigationSplitView(columnVisibility: categoriesVisibility) {
                 sidebarView
                     .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
@@ -198,6 +217,8 @@ public struct ContentView: View {
                 playbackPlaceholder
             }
             .navigationSplitViewStyle(.balanced)
+            .toolbarBackground(palette.background, for: .windowToolbar)
+            .toolbarBackground(palette.navy ? .visible : .automatic, for: .windowToolbar)
         } else {
             NavigationSplitView(columnVisibility: categoriesVisibility) {
                 sidebarView
@@ -206,7 +227,12 @@ public struct ContentView: View {
                 playbackPlaceholder
                     .toolbar {
                         ToolbarItem(placement: .navigation) {
-                            Button { manager.toggleChannelsSidebar() } label: {
+                            Button {
+                                if manager.showingDashboard {
+                                    manager.browse(manager.selectedSection)
+                                    if !manager.showsChannelsSidebar { manager.toggleChannelsSidebar() }
+                                } else { manager.toggleChannelsSidebar() }
+                            } label: {
                                 Label("Show Channels", systemImage: "sidebar.right")
                             }
                             .help("Show the channel sidebar")
@@ -215,11 +241,16 @@ public struct ContentView: View {
                     }
             }
             .navigationSplitViewStyle(.balanced)
+            .toolbarBackground(palette.background, for: .windowToolbar)
+            .toolbarBackground(palette.navy ? .visible : .automatic, for: .windowToolbar)
         }
     }
 
     private var playbackPlaceholder: some View {
-        Color.black
+        Group {
+            if manager.showingDashboard { DashboardView(manager: manager) }
+            else { Color.black }
+        }
             .toolbar {
                 ToolbarItemGroup(placement: .primaryAction) {
                     if manager.selectedSection == .live {
@@ -257,6 +288,9 @@ public struct ContentView: View {
 #endif
         }
         .navigationSplitViewStyle(.balanced)
+        #if !os(macOS)
+        .toolbar { Button { manager.showingDashboard = true } label: { Label("Home", systemImage: "house") } }
+        #endif
     }
 
     // MARK: - Column 1: Sidebar
@@ -285,9 +319,24 @@ public struct ContentView: View {
             .padding(.top, 18)
             .padding(.bottom, 8)
 
-            Picker("Section", selection: $manager.selectedSection) {
+            Button { manager.showingDashboard = true } label: {
+                Label("Home", systemImage: "square.grid.2x2.fill")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(Color.teal.opacity(manager.showingDashboard ? 0.18 : 0.06), in: RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.teal)
+            .accessibilityAddTraits(manager.showingDashboard ? .isSelected : [])
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+
+            Picker("Section", selection: Binding(get: { manager.showingDashboard ? nil : manager.selectedSection }, set: { section in
+                if let section { manager.browse(section) }
+            })) {
                 ForEach(M3UItem.ContentType.allCases, id: \.self) { section in
-                    Label(section.rawValue, systemImage: section.iconName).tag(section)
+                    Label(section.rawValue, systemImage: section.iconName).tag(Optional(section))
                 }
             }
             .pickerStyle(.segmented)
@@ -322,7 +371,12 @@ public struct ContentView: View {
             
             Divider()
             
-            List(selection: $manager.selectedCategory) {
+            List(selection: Binding(get: { manager.showingDashboard ? nil : manager.selectedCategory }, set: { value in
+                if let value {
+                    manager.showingDashboard = false
+                    manager.selectedCategory = value
+                }
+            })) {
                 Section("Quick Access") {
                     if !manager.downloads.isOnline {
                         Text("Offline — open Downloads to watch saved media.").font(.caption).foregroundStyle(.secondary)
@@ -339,7 +393,7 @@ public struct ContentView: View {
                             }
                         } icon: {
                             Image(systemName: manager.selectedSection.iconName)
-                                .foregroundColor(.blue)
+                                .foregroundColor(.accentColor)
                         }
                     }
                     
@@ -368,7 +422,7 @@ public struct ContentView: View {
                                     .foregroundStyle(.secondary)
                             }
                         } icon: {
-                            Image(systemName: "clock.arrow.circlepath").foregroundStyle(.blue)
+                            Image(systemName: "clock.arrow.circlepath").foregroundStyle(Color.accentColor)
                         }
                     }
                 }
@@ -402,12 +456,14 @@ public struct ContentView: View {
                 }
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(palette.navy ? .hidden : .automatic)
             .transaction {
                 $0.animation = nil
                 $0.disablesAnimations = true
             }
         }
         .navigationTitle("IPTV Library")
+        .background(palette.background)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Menu {
@@ -415,7 +471,7 @@ public struct ContentView: View {
                 } label: {
                     Label("Appearance", systemImage: "circle.lefthalf.filled")
                 }
-                .help("Choose System, Light, or Dark appearance")
+                .help("Choose System, Light, Dark, or Navy appearance")
 
                 Button {
                     manager.showingPlaylistSheet = true
@@ -485,6 +541,7 @@ public struct ContentView: View {
                 .buttonStyle(.borderedProminent)
             }
             .padding()
+            .background(palette.background)
             .navigationTitle("About IPTV Player")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -519,6 +576,7 @@ public struct ContentView: View {
 // MARK: - Add Source Modal View (Xtream Codes API & M3U Playlist)
 
 public struct AddSourceSheetView: View {
+    @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
     
     public init(manager: IPTVPlayerManager) {
@@ -599,6 +657,7 @@ public struct AddSourceSheetView: View {
                 .padding(.vertical, 14)
                 .background(Color.secondary.opacity(0.06))
             }
+            .background(palette.background)
             .navigationTitle("Add IPTV Source")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -721,7 +780,7 @@ public struct AddSourceSheetView: View {
                     manager.inputPlaylistURL = "https://iptv-org.github.io/iptv/countries/us.m3u"
                 } label: {
                     HStack {
-                        Image(systemName: "flag.fill").foregroundColor(.blue)
+                        Image(systemName: "flag.fill").foregroundColor(.accentColor)
                         Text("Public US Live Streams (iptv-org)")
                         Spacer()
                         Image(systemName: "arrow.right.circle").foregroundColor(.secondary)

@@ -10,7 +10,9 @@ import VLC
 @MainActor
 final class SidebarLayoutTests: XCTestCase {
     private func manager() -> IPTVPlayerManager {
-        IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: "sidebar-tests-\(UUID())")!)
+        let manager = IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: "sidebar-tests-\(UUID())")!)
+        manager.showingDashboard = false
+        return manager
     }
 
     func testEachToggleOnlyChangesItsOwnPane() {

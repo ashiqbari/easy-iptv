@@ -220,6 +220,7 @@ import AppKit
 /// High-performance video player view wrapping hardware-accelerated AVPlayerLayer
 /// with custom HUD overlays, buffering indicators, error states, and responsive controls for iOS and macOS.
 public struct IPTVPlaybackView: View {
+    @Environment(\.appPalette) private var palette
     
     @ObservedObject var manager: IPTVPlayerManager
     @State private var visibilityID = UUID()
@@ -232,7 +233,7 @@ public struct IPTVPlaybackView: View {
     public var body: some View {
         ZStack {
             // Background deep canvas
-            Color.black.ignoresSafeArea()
+            palette.playbackBackground.ignoresSafeArea()
             
             Group {
 #if os(macOS)
@@ -273,9 +274,9 @@ public struct IPTVPlaybackView: View {
 
             if manager.isViewingMovieDetails, let movie = manager.movieOverviewItem {
                 MovieDetailsView(item: movie, manager: manager)
-                    .background(Color.black)
+                    .background(palette.background)
             } else if manager.isViewingSeriesDetails {
-                seriesHeroView.background(Color.black)
+                seriesHeroView.background(palette.background)
             }
         }
         .sheet(isPresented: $manager.showingEPGSheet) {
@@ -390,7 +391,7 @@ public struct IPTVPlaybackView: View {
         .padding()
         .background(
             LinearGradient(
-                colors: [Color.black.opacity(0.85), Color.clear, Color.black.opacity(0.85)],
+                colors: [palette.playbackBackground.opacity(0.95), Color.clear, palette.playbackBackground.opacity(0.95)],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -980,11 +981,11 @@ public struct IPTVPlaybackView: View {
                                                     .font(.subheadline.bold())
                                                 Text(manager.continueWatchingEpisode?.name ?? manager.seriesEpisodes.first?.name ?? (manager.isLoadingEpisodes ? "Loading episodes…" : "No episodes available"))
                                                     .font(.caption2)
-                                                    .foregroundColor(.white.opacity(0.85))
+                                                    .foregroundColor((palette.navy ? Color.black : .white).opacity(0.85))
                                                     .lineLimit(1)
                                             }
                                         }
-                                        .foregroundColor(.white)
+                                        .foregroundColor(palette.navy ? .black : .white)
                                         .padding(.horizontal, 22)
                                         .padding(.vertical, 10)
                                         .background(Color.accentColor)
@@ -1143,7 +1144,7 @@ public struct IPTVPlaybackView: View {
                             } header: {
                                 episodeNavigationBar
                                     .padding(.vertical, 8)
-                                    .background(.background)
+                                    .background(palette.background)
                             }
                         }
                     }
@@ -1152,7 +1153,7 @@ public struct IPTVPlaybackView: View {
             .padding(.bottom, 40)
         }
         .foregroundStyle(.primary)
-        .background(.background)
+        .background(palette.background)
         .coordinateSpace(name: "seriesGridViewport")
         .onPreferenceChange(EpisodePositions.self) { positions in
             manager.visibleEpisodeIndex = positions.min {
@@ -1250,7 +1251,7 @@ public struct IPTVPlaybackView: View {
                                 .opacity(0.85)
                         }
                     }
-                    .foregroundColor(isSelected ? .white : .primary)
+                    .foregroundColor(isSelected ? (palette.navy ? .black : .white) : .primary)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity)
@@ -1339,7 +1340,7 @@ public struct IPTVPlaybackView: View {
                     .foregroundColor(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(Color.blue)
+                    .background(Color.accentColor)
                     .cornerRadius(6)
                 }
                 .buttonStyle(.plain)
@@ -1370,7 +1371,7 @@ public struct IPTVPlaybackView: View {
                                     Spacer()
                                 }
                                 .padding(10)
-                                .background(manager.currentChannel?.streamURL == ep.streamURL ? Color.blue.opacity(0.35) : Color.white.opacity(0.08))
+                                .background(manager.currentChannel?.streamURL == ep.streamURL ? Color.accentColor.opacity(0.35) : Color.white.opacity(0.08))
                                 .cornerRadius(8)
                             }
                             .buttonStyle(.plain)
@@ -1454,6 +1455,7 @@ private struct EpisodeArtworkView: View {
 
 // MARK: - Native Live TV Electronic Program Guide (EPG) Sheet
 public struct NativeEPGSheetView: View {
+    @Environment(\.appPalette) private var palette
     let channel: M3UItem
     @ObservedObject var manager: IPTVPlayerManager
     
@@ -1558,7 +1560,7 @@ public struct NativeEPGSheetView: View {
                                         .foregroundColor(.blue)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
-                                        .background(Color.blue.opacity(0.18))
+                                        .background(Color.accentColor.opacity(0.18))
                                         .cornerRadius(4)
                                     
                                     Spacer()
@@ -1583,7 +1585,7 @@ public struct NativeEPGSheetView: View {
                                             RoundedRectangle(cornerRadius: 3)
                                                 .fill(Color.primary.opacity(0.15))
                                             RoundedRectangle(cornerRadius: 3)
-                                                .fill(Color.blue)
+                                                .fill(Color.accentColor)
                                                 .frame(width: geo.size.width * CGFloat(current.progress(at: now)))
                                         }
                                     }
@@ -1606,7 +1608,7 @@ public struct NativeEPGSheetView: View {
                             .cornerRadius(12)
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.blue.opacity(0.3), lineWidth: 1)
+                                    .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
                             )
                             .padding(.horizontal, 20)
                         }
@@ -1668,6 +1670,7 @@ public struct NativeEPGSheetView: View {
                     .padding(.bottom, 30)
                 }
             }
+            .background(palette.background)
             .navigationTitle("Program Guide")
             .toolbar {
                 ToolbarItem(placement: .automatic) {
@@ -1744,7 +1747,7 @@ public struct NativeEPGSheetView: View {
     
     private var epgLogoFallback: some View {
         RoundedRectangle(cornerRadius: 8)
-            .fill(Color.blue.opacity(0.2))
+            .fill(Color.accentColor.opacity(0.2))
             .frame(width: 44, height: 44)
             .overlay(
                 Image(systemName: "tv.fill")

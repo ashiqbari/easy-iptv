@@ -23,6 +23,9 @@ final class AppearanceTests: XCTestCase {
         }
         XCTAssertEqual(AppearancePreference.light.colorScheme, .light)
         XCTAssertEqual(AppearancePreference.dark.colorScheme, .dark)
+        XCTAssertEqual(AppearancePreference.navy.colorScheme, .dark)
+        XCTAssertTrue(AppPalette(navy: true).navy)
+        XCTAssertNotEqual(AppPalette(navy: true).background, AppPalette().background)
         defaults.set("unknown", forKey: AppearancePreference.storageKey)
         let invalid = AppStorage<AppearancePreference>(wrappedValue: .system, AppearancePreference.storageKey, store: defaults)
         XCTAssertEqual(invalid.wrappedValue, .system)
@@ -87,7 +90,7 @@ final class AppearanceTests: XCTestCase {
         }
         try await settle()
         let original = try XCTUnwrap(surface(in: hosting))
-        for option in [AppearancePreference.light, .system, .dark, .system, .light, .system] {
+        for option in [AppearancePreference.light, .navy, .system, .dark, .navy, .light, .system] {
             defaults.set(option.rawValue, forKey: AppearancePreference.storageKey)
             try await settle()
             let expected = option.colorScheme ?? systemScheme
