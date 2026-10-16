@@ -42,7 +42,7 @@ public struct ContentView: View {
     // MARK: - State Management
     
     @ObservedObject var manager: IPTVPlayerManager
-    private var palette: AppPalette { AppPalette(navy: appearance == .navy) }
+    private var palette: AppPalette { AppPalette(appearance: appearance) }
     @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
     #if os(macOS)
     @State private var playbackBounds: CGRect = .zero
@@ -182,16 +182,16 @@ public struct ContentView: View {
         .onChange(of: appearance, initial: true) { _, preference in
             switch preference {
             case .system: NSApplication.shared.appearance = nil
-            case .light: NSApplication.shared.appearance = NSAppearance(named: .aqua)
-            case .dark, .navy: NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+            case .light, .warmStone: NSApplication.shared.appearance = NSAppearance(named: .aqua)
+            case .dark, .navy, .obsidian, .forest: NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
             }
         }
         #else
         .preferredColorScheme(appearance.colorScheme)
         #endif
-        .tint(AppPalette(navy: appearance == .navy).controlAccent)
-        .accentColor(AppPalette(navy: appearance == .navy).accent)
-        .environment(\.appPalette, AppPalette(navy: appearance == .navy))
+        .tint(AppPalette(appearance: appearance).controlAccent)
+        .accentColor(AppPalette(appearance: appearance).accent)
+        .environment(\.appPalette, AppPalette(appearance: appearance))
     }
 
     private static var backgroundNotification: Notification.Name {
@@ -229,7 +229,7 @@ public struct ContentView: View {
                     }
             }
             .toolbarBackground(palette.background, for: .windowToolbar)
-            .toolbarBackground(palette.navy ? .visible : .automatic, for: .windowToolbar)
+            .toolbarBackground(palette.isCustom ? .visible : .automatic, for: .windowToolbar)
         } else if manager.showsChannelsSidebar {
             NavigationSplitView(columnVisibility: categoriesVisibility) {
                 sidebarView
@@ -242,7 +242,7 @@ public struct ContentView: View {
             }
             .navigationSplitViewStyle(.balanced)
             .toolbarBackground(palette.background, for: .windowToolbar)
-            .toolbarBackground(palette.navy ? .visible : .automatic, for: .windowToolbar)
+            .toolbarBackground(palette.isCustom ? .visible : .automatic, for: .windowToolbar)
         } else {
             NavigationSplitView(columnVisibility: categoriesVisibility) {
                 sidebarView
@@ -252,7 +252,7 @@ public struct ContentView: View {
             }
             .navigationSplitViewStyle(.balanced)
             .toolbarBackground(palette.background, for: .windowToolbar)
-            .toolbarBackground(palette.navy ? .visible : .automatic, for: .windowToolbar)
+            .toolbarBackground(palette.isCustom ? .visible : .automatic, for: .windowToolbar)
         }
     }
 
@@ -464,7 +464,7 @@ public struct ContentView: View {
                 }
             }
             .listStyle(.sidebar)
-            .scrollContentBackground(palette.navy ? .hidden : .automatic)
+            .scrollContentBackground(palette.isCustom ? .hidden : .automatic)
             .transaction {
                 $0.animation = nil
                 $0.disablesAnimations = true
@@ -486,7 +486,7 @@ public struct ContentView: View {
             } label: {
                 Label("Appearance", systemImage: "circle.lefthalf.filled")
             }
-            .help("Choose System, Light, Dark, or Navy appearance")
+            .help("Choose an appearance theme")
 
             Menu {
                 Button("Add Source…") { manager.showingPlaylistSheet = true }

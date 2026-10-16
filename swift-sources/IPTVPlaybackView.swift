@@ -466,7 +466,7 @@ public struct IPTVPlaybackView: View {
                     
                     Text(channel.displayGroup)
                         .font(.caption)
-                        .foregroundColor(.gray)
+                        .foregroundColor(.white.opacity(0.75))
                 }
                 
                 Spacer()
@@ -664,7 +664,6 @@ public struct IPTVPlaybackView: View {
                             }
                         }
                     )
-                    .accentColor(.blue)
                     
                     Text(manager.duration > 0 ? manager.formattedDuration : "--:--")
                         .font(.caption.monospacedDigit())
@@ -975,16 +974,16 @@ public struct IPTVPlaybackView: View {
                                                     .font(.subheadline.bold())
                                                 Text(manager.continueWatchingEpisode?.name ?? manager.seriesEpisodes.first?.name ?? (manager.isLoadingEpisodes ? "Loading episodes…" : "No episodes available"))
                                                     .font(.caption2)
-                                                    .foregroundColor((palette.navy ? Color.black : .white).opacity(0.85))
+                                                    .foregroundColor(palette.onAccent.opacity(0.85))
                                                     .lineLimit(1)
                                             }
                                         }
-                                        .foregroundColor(palette.navy ? .black : .white)
+                                        .foregroundColor(palette.onAccent)
                                         .padding(.horizontal, 22)
                                         .padding(.vertical, 10)
                                         .background(Color.accentColor)
                                         .cornerRadius(10)
-                                        .shadow(color: .blue.opacity(0.3), radius: 12, x: 0, y: 4)
+                                        .shadow(color: Color.accentColor.opacity(0.3), radius: 12, x: 0, y: 4)
                                     }
                                     .buttonStyle(.plain)
                                     .disabled(manager.seriesEpisodes.isEmpty)
@@ -1245,7 +1244,7 @@ public struct IPTVPlaybackView: View {
                                 .opacity(0.85)
                         }
                     }
-                    .foregroundColor(isSelected ? (palette.navy ? .black : .white) : .primary)
+                    .foregroundColor(isSelected ? (palette.onAccent) : .primary)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity)
@@ -1261,24 +1260,24 @@ public struct IPTVPlaybackView: View {
     /// Placeholder state when no channel is selected.
     private var emptyPlaceholderView: some View {
         ZStack {
-            LinearGradient(colors: [Color(red: 0.07, green: 0.12, blue: 0.19), .black],
+            LinearGradient(colors: [palette.surface, palette.background],
                            startPoint: .topLeading, endPoint: .bottomTrailing)
             VStack(spacing: 24) {
                 Image(systemName: "play.tv.fill")
                     .font(.system(size: 48, weight: .light))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(palette.accent)
                     .frame(width: 112, height: 112)
-                    .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 28))
+                    .background(palette.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 28))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 28).strokeBorder(palette.accent.opacity(0.12), lineWidth: 1)
                     }
                 VStack(spacing: 10) {
                     Text("Make time for a good watch.")
                         .font(.system(size: 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text("Browse live TV, discover a movie, or settle into a series. Choose something from your library to begin.")
                         .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.65))
+                        .foregroundStyle(.secondary)
                         .frame(maxWidth: 360)
                 }
                 Button { manager.showingPlaylistSheet = true } label: {
@@ -1289,7 +1288,7 @@ public struct IPTVPlaybackView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 if let error = manager.errorMessage {
-                    Text(error).foregroundStyle(.white).multilineTextAlignment(.center)
+                    Text(error).foregroundStyle(.primary).multilineTextAlignment(.center)
                     Button("Open Downloads") { manager.showingDownloads = true }
                         .buttonStyle(.borderedProminent)
                 }
@@ -1309,10 +1308,10 @@ public struct IPTVPlaybackView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Series Episodes")
                             .font(.headline.bold())
-                            .foregroundColor(.white)
+                            .foregroundColor(.primary)
                         Text("\(manager.seriesEpisodes.count) episode\(manager.seriesEpisodes.count == 1 ? "" : "s") available")
                             .font(.caption2)
-                            .foregroundColor(.purple)
+                            .foregroundColor(.secondary)
                     }
                     Spacer()
                     Button {
@@ -1320,7 +1319,7 @@ public struct IPTVPlaybackView: View {
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.title3)
-                            .foregroundColor(.white.opacity(0.7))
+                            .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -1336,22 +1335,22 @@ public struct IPTVPlaybackView: View {
                                 HStack(spacing: 10) {
                                     Image(systemName: manager.currentChannel?.streamURL == ep.streamURL ? "speaker.wave.2.fill" : "play.circle.fill")
                                         .font(.title3)
-                                        .foregroundColor(manager.currentChannel?.streamURL == ep.streamURL ? .blue : .white)
+                                        .foregroundColor(manager.currentChannel?.streamURL == ep.streamURL ? Color.accentColor : .secondary)
                                     
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(ep.name)
                                             .font(.subheadline.weight(.medium))
-                                            .foregroundColor(.white)
+                                            .foregroundColor(.primary)
                                             .lineLimit(1)
                                         Text(ep.groupTitle)
                                             .font(.caption2)
-                                            .foregroundColor(.white.opacity(0.6))
+                                            .foregroundColor(.secondary)
                                         MediaProgressView(store: manager.progressStore, item: ep)
                                     }
                                     Spacer()
                                 }
                                 .padding(10)
-                                .background(manager.currentChannel?.streamURL == ep.streamURL ? Color.accentColor.opacity(0.35) : Color.white.opacity(0.08))
+                                .background(manager.currentChannel?.streamURL == ep.streamURL ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.05))
                                 .cornerRadius(8)
                             }
                             .buttonStyle(.plain)
@@ -1361,7 +1360,7 @@ public struct IPTVPlaybackView: View {
                 }
             }
             .frame(width: 320)
-            .background(Color.black.opacity(0.92))
+            .background(palette.surface)
             .cornerRadius(12)
             .padding()
             .shadow(radius: 20)
@@ -1377,13 +1376,13 @@ struct MediaProgressView: View {
         if let progress = store.progress(for: item) {
             if progress.completed {
                 Label("Watched", systemImage: "checkmark.circle.fill")
-                    .font(.caption2).foregroundColor(.gray)
+                    .font(.caption2).foregroundColor(.secondary)
             } else if let position = progress.resumePosition {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("Continue from \(PlaybackProgress.timestamp(position))", systemImage: "play.circle")
-                        .font(.caption2).foregroundColor(.blue)
+                        .font(.caption2).foregroundColor(Color.accentColor)
                     if progress.duration > 0 {
-                        ProgressView(value: progress.fraction).tint(.blue)
+                        ProgressView(value: progress.fraction).tint(Color.accentColor)
                             .accessibilityLabel("Playback progress")
                             .accessibilityValue("\(Int(progress.fraction * 100)) percent")
                     }
@@ -1537,7 +1536,7 @@ public struct NativeEPGSheetView: View {
                                 HStack {
                                     Text("ON AIR NOW")
                                         .font(.caption2.bold())
-                                        .foregroundColor(.blue)
+                                        .foregroundColor(Color.accentColor)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
                                         .background(Color.accentColor.opacity(0.18))
@@ -1574,7 +1573,7 @@ public struct NativeEPGSheetView: View {
                                     HStack {
                                         Text("\(Int(current.progress(at: now) * 100))% elapsed")
                                             .font(.caption2)
-                                            .foregroundColor(.blue)
+                                            .foregroundColor(Color.accentColor)
                                         Spacer()
                                         Text("\(current.durationMin) min total")
                                             .font(.caption2)
@@ -1731,7 +1730,7 @@ public struct NativeEPGSheetView: View {
             .frame(width: 44, height: 44)
             .overlay(
                 Image(systemName: "tv.fill")
-                    .foregroundColor(.blue)
+                    .foregroundColor(Color.accentColor)
             )
     }
 }

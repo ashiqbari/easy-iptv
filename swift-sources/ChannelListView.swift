@@ -168,7 +168,7 @@ public struct ChannelListView: View {
                     .font(.subheadline.weight(.medium))
                     .padding(.horizontal, 6)
                     .frame(minWidth: 0, maxWidth: .infinity, minHeight: 32)
-                    .foregroundStyle(isSelected ? (palette.navy ? Color.black : .white) : .primary)
+                    .foregroundStyle(isSelected ? palette.onAccent : .primary)
                     .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
                     .contentShape(Capsule())
                 }

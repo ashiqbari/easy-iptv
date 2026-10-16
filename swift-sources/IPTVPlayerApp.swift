@@ -18,21 +18,31 @@ final class DownloadAppDelegate: NSObject, UIApplicationDelegate {
 
 enum AppearancePreference: String, CaseIterable {
     static let storageKey = "appearance"
-    case system, light, dark, navy
+    case system, light, dark, navy, obsidian, forest, warmStone
+
+    var title: String { self == .warmStone ? "Warm Stone" : rawValue.capitalized }
 
     var colorScheme: ColorScheme? {
         switch self {
         case .system: return nil
-        case .light: return .light
-        case .dark, .navy: return .dark
+        case .light, .warmStone: return .light
+        case .dark, .navy, .obsidian, .forest: return .dark
         }
     }
 }
 
 struct AppPalette {
-    var navy = false
+    var appearance: AppearancePreference = .system
+    var isCustom: Bool { [.navy, .obsidian, .forest, .warmStone].contains(appearance) }
+    var onAccent: Color { [.navy, .obsidian, .forest].contains(appearance) ? .black : .white }
     var background: Color {
-        if navy { return Color(red: 0.035, green: 0.06, blue: 0.12) }
+        switch appearance {
+        case .navy: return Color(red: 0.035, green: 0.06, blue: 0.12)
+        case .obsidian: return Color(red: 21/255, green: 21/255, blue: 25/255)
+        case .forest: return Color(red: 16/255, green: 35/255, blue: 30/255)
+        case .warmStone: return Color(red: 245/255, green: 241/255, blue: 233/255)
+        default: break
+        }
         #if os(macOS)
         return Color(nsColor: .windowBackgroundColor)
         #else
@@ -40,16 +50,38 @@ struct AppPalette {
         #endif
     }
     var surface: Color {
-        if navy { return Color(red: 0.075, green: 0.11, blue: 0.18) }
+        switch appearance {
+        case .navy: return Color(red: 0.075, green: 0.11, blue: 0.18)
+        case .obsidian: return Color(red: 34/255, green: 33/255, blue: 42/255)
+        case .forest: return Color(red: 25/255, green: 51/255, blue: 43/255)
+        case .warmStone: return Color(red: 1, green: 252/255, blue: 246/255)
+        default: break
+        }
         #if os(macOS)
         return Color(nsColor: .controlBackgroundColor)
         #else
         return Color(uiColor: .secondarySystemBackground)
         #endif
     }
-    var playbackBackground: Color { navy ? background : .black }
-    var controlAccent: Color { navy ? Color(red: 0.02, green: 0.42, blue: 0.46) : .blue }
-    var accent: Color { navy ? Color(red: 0.12, green: 0.72, blue: 0.78) : .blue }
+    var playbackBackground: Color { isCustom && appearance.colorScheme == .dark ? background : .black }
+    var controlAccent: Color {
+        switch appearance {
+        case .navy: return Color(red: 0.02, green: 0.42, blue: 0.46)
+        case .obsidian: return Color(red: 114/255, green: 81/255, blue: 190/255)
+        case .forest: return Color(red: 37/255, green: 112/255, blue: 82/255)
+        case .warmStone: return accent
+        default: return .blue
+        }
+    }
+    var accent: Color {
+        switch appearance {
+        case .navy: return Color(red: 0.12, green: 0.72, blue: 0.78)
+        case .obsidian: return Color(red: 167/255, green: 139/255, blue: 250/255)
+        case .forest: return Color(red: 110/255, green: 231/255, blue: 183/255)
+        case .warmStone: return Color(red: 172/255, green: 73/255, blue: 47/255)
+        default: return .blue
+        }
+    }
 }
 
 private struct AppPaletteKey: EnvironmentKey {
@@ -69,7 +101,7 @@ struct AppearancePicker: View {
     var body: some View {
         Picker("Appearance", selection: $appearance) {
             ForEach(AppearancePreference.allCases, id: \.self) { option in
-                Text(option.rawValue.capitalized).tag(option)
+                Text(option.title).tag(option)
             }
         }
         .pickerStyle(.inline)

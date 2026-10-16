@@ -24,14 +24,44 @@ final class AppearanceTests: XCTestCase {
         XCTAssertEqual(AppearancePreference.light.colorScheme, .light)
         XCTAssertEqual(AppearancePreference.dark.colorScheme, .dark)
         XCTAssertEqual(AppearancePreference.navy.colorScheme, .dark)
-        XCTAssertTrue(AppPalette(navy: true).navy)
-        XCTAssertNotEqual(AppPalette(navy: true).background, AppPalette().background)
+        XCTAssertTrue(AppPalette(appearance: .navy).isCustom)
+        XCTAssertNotEqual(AppPalette(appearance: .navy).background, AppPalette().background)
+        for option in [AppearancePreference.obsidian, .forest, .warmStone] {
+            let palette = AppPalette(appearance: option)
+            XCTAssertTrue(palette.isCustom)
+            XCTAssertNotEqual(palette.background, AppPalette(appearance: .navy).background)
+            XCTAssertEqual(palette.onAccent, option == .warmStone ? .white : .black)
+            XCTAssertEqual(option.colorScheme, option == .warmStone ? .light : .dark)
+        }
+        XCTAssertEqual(AppearancePreference.warmStone.title, "Warm Stone")
         defaults.set("unknown", forKey: AppearancePreference.storageKey)
         let invalid = AppStorage<AppearancePreference>(wrappedValue: .system, AppearancePreference.storageKey, store: defaults)
         XCTAssertEqual(invalid.wrappedValue, .system)
     }
 
     #if os(macOS)
+    func testCustomThemeTextContrast() throws {
+        func luminance(_ color: Color) throws -> Double {
+            let rgb = try XCTUnwrap(NSColor(color).usingColorSpace(.sRGB))
+            let linear = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { value in
+                value <= 0.04045 ? Double(value) / 12.92 : pow((Double(value) + 0.055) / 1.055, 2.4)
+            }
+            return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
+        }
+        func contrast(_ first: Color, _ second: Color) throws -> Double {
+            let a = try luminance(first), b = try luminance(second)
+            return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+        }
+        for theme in [AppearancePreference.obsidian, .forest, .warmStone] {
+            let palette = AppPalette(appearance: theme)
+            let text: Color = theme == .warmStone ? .black : .white
+            XCTAssertGreaterThanOrEqual(try contrast(text, palette.background), 4.5)
+            XCTAssertGreaterThanOrEqual(try contrast(text, palette.surface), 4.5)
+            XCTAssertGreaterThanOrEqual(try contrast(palette.onAccent, palette.accent), 4.5)
+            XCTAssertGreaterThanOrEqual(try contrast(.white, palette.controlAccent), 4.5)
+        }
+    }
+
     func testCatalogCardsFitNarrowPanelsWithLongTitles() {
         let item = M3UItem(name: "A long movie or channel name that should wrap without pushing the favorite control out of the panel",
                            streamURL: URL(fileURLWithPath: "/private/tmp/catalog-layout.mp4"), contentType: .movie)
@@ -90,7 +120,7 @@ final class AppearanceTests: XCTestCase {
         }
         try await settle()
         let original = try XCTUnwrap(surface(in: hosting))
-        for option in [AppearancePreference.light, .navy, .system, .dark, .navy, .light, .system] {
+        for option in [AppearancePreference.light, .navy, .obsidian, .forest, .warmStone, .system, .dark, .light, .system] {
             defaults.set(option.rawValue, forKey: AppearancePreference.storageKey)
             try await settle()
             let expected = option.colorScheme ?? systemScheme

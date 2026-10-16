@@ -130,7 +130,7 @@ final class DashboardTests: XCTestCase {
         manager.toggleFavorite(live)
         manager.toggleFavorite(show)
         for scheme in [ColorScheme.light, .dark] {
-            let controller = NSHostingController(rootView: DashboardView(manager: manager).environment(\.colorScheme, scheme).environment(\.appPalette, AppPalette(navy: scheme == .dark)))
+            let controller = NSHostingController(rootView: DashboardView(manager: manager).environment(\.colorScheme, scheme).environment(\.appPalette, AppPalette(appearance: scheme == .dark ? .navy : .light)))
             for width in [320.0, 390, 700, 1000, 1600] {
                 let size = controller.sizeThatFits(in: CGSize(width: width, height: 820))
                 XCTAssertLessThanOrEqual(size.width, width + 0.5)

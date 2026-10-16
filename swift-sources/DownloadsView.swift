@@ -114,6 +114,7 @@ struct DownloadSeasonControl: View {
 }
 
 struct DownloadHeaderControls: View {
+    @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
     @ObservedObject var downloads: DownloadManager
     @FocusState private var downloadsFocused: Bool
@@ -142,7 +143,7 @@ struct DownloadHeaderControls: View {
                 if count > 0 {
                     Text("\(count)").font(.system(size: 9, weight: .semibold))
                         .padding(.horizontal, 4).padding(.vertical, 1)
-                        .foregroundStyle(.white).background(.blue, in: Capsule())
+                        .foregroundStyle(.white).background(palette.controlAccent, in: Capsule())
                         .offset(x: 8, y: -7).allowsHitTesting(false).accessibilityHidden(true)
                 }
             }

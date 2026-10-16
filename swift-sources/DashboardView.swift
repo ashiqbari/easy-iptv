@@ -77,17 +77,17 @@ struct DashboardView: View {
         HStack(alignment: .center, spacing: 20) {
             VStack(alignment: .leading, spacing: 12) {
                 Label("YOUR WATCHING SPACE", systemImage: "sparkles")
-                    .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(Color.cyan)
+                    .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(accent)
                 Text("Something good\nto come home to.")
                     .font(.system(size: compact ? 26 : 34, weight: .bold, design: .rounded))
                     .fixedSize(horizontal: false, vertical: true)
                 Text("Live moments. Movie nights. One place.")
-                    .font(.subheadline).foregroundStyle(.white.opacity(0.78))
+                    .font(.subheadline).foregroundStyle(Color.primary.opacity(0.78))
                 if let current = manager.currentChannel {
                     Button { manager.showingDashboard = false } label: {
                         Label("Back to \(current.name)", systemImage: "play.fill").lineLimit(1)
                     }
-                    .buttonStyle(.borderedProminent).tint(Color(red: 0.02, green: 0.42, blue: 0.46))
+                    .buttonStyle(.borderedProminent).tint(palette.controlAccent)
                     .padding(.top, 4)
                 }
             }
@@ -95,17 +95,16 @@ struct DashboardView: View {
             if !compact {
             Image(systemName: "play.tv.fill")
                 .font(.system(size: 64, weight: .light))
-                .foregroundStyle(Color.cyan.opacity(0.7))
+                .foregroundStyle(accent.opacity(0.7))
                 .accessibilityHidden(true)
             }
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(Color.primary)
         .padding(compact ? 20 : 28)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             RoundedRectangle(cornerRadius: 24)
-                .fill(LinearGradient(colors: [Color(red: 0.08, green: 0.15, blue: 0.28),
-                                              Color(red: 0.04, green: 0.27, blue: 0.31)],
+                .fill(LinearGradient(colors: [palette.surface, accent.opacity(0.14)],
                                      startPoint: .topLeading, endPoint: .bottomTrailing))
         }
     }
@@ -216,10 +215,11 @@ struct DashboardView: View {
 private struct DashboardCardStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovering = false
+    @Environment(\.appPalette) private var palette
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .contentShape(RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.teal.opacity(hovering ? 0.65 : 0), lineWidth: 2))
+            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(palette.accent.opacity(hovering ? 0.65 : 0), lineWidth: 2))
             .opacity(configuration.isPressed ? 0.75 : 1)
             .offset(y: hovering && !reduceMotion ? -2 : 0)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovering)
