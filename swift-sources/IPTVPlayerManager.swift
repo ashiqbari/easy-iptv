@@ -98,6 +98,20 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     private var libraryItemsByKey: [String: M3UItem] = [:]
     private var visibleChannelIDs: Set<UUID> = []
     private var channelKeysByID: [UUID: String] = [:]
+    private var librarySearchTextByID: [UUID: String] = [:]
+    private var sectionsWithCatalogDates: Set<M3UItem.ContentType> = []
+    private var sectionsWithRatings: Set<M3UItem.ContentType> = []
+    var hasCatalogDates: Bool { sectionsWithCatalogDates.contains(selectedSection) }
+    var hasRatings: Bool { sectionsWithRatings.contains(selectedSection) }
+    var libraryFiltersActive: Bool { librarySortOrder != .provider || favoritesOnly || recentlyAddedOnly || minimumRating > 0 }
+    func resetLibraryFilters() {
+        librarySortOrder = .provider
+        favoritesOnly = false
+        recentlyAddedOnly = false
+        minimumRating = 0
+    }
+    private var libraryFilterTask: Task<Void, Never>?
+    private var libraryFilterRevision = UUID()
     private var categoryKeysByID: [UUID: String] = [:]
     private var categoryKeysBySection: [M3UItem.ContentType: [String: Set<String>]] = [:]
     private var organizationCategoryItems: [M3UItem.ContentType: [M3UItem]] = [:]
@@ -141,13 +155,21 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// The full list of parsed channels from the active playlist.
     @Published public private(set) var channels: [M3UItem] = [] {
         didSet {
+            if channels.count != oldValue.count || !zip(channels, oldValue).allSatisfy({ $0.id == $1.id }) {
+                filteredChannels = []
+            }
             libraryItemsByKey = [:]
+            librarySearchTextByID = [:]
+            sectionsWithCatalogDates = []; sectionsWithRatings = []
             categoryKeysByID = [:]; categoryKeysBySection = [:]; organizationCategoryItems = [:]
             var categoryHashes: [String: String] = [:]
             var itemKeys: [UUID: String] = [:]
             for item in channels {
                 let key = channelKeysByID[item.id] ?? PlaybackProgressStore.key(for: item)
                 libraryItemsByKey[key] = item; itemKeys[item.id] = key
+                librarySearchTextByID[item.id] = Self.normalizedLibraryText(item.name + "\n" + item.groupTitle)
+                if item.catalogDate != nil { sectionsWithCatalogDates.insert(item.contentType) }
+                if item.rating != nil { sectionsWithRatings.insert(item.contentType) }
                 let identity = ChannelOrganization.categoryIdentity(item)
                 let categoryKey = categoryHashes[identity] ?? ChannelOrganization.categoryKey(item)
                 categoryHashes[identity] = categoryKey; categoryKeysByID[item.id] = categoryKey
@@ -200,11 +222,41 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         }
     }
     
+    @Published var librarySortOrder: LibrarySortOrder = .provider {
+        didSet {
+            guard oldValue != librarySortOrder else { return }
+            storageDefaults.set(librarySortOrder.rawValue, forKey: "com.iptvplayer.librarySort")
+            updateFilteredChannelsOnly()
+        }
+    }
+    @Published var favoritesOnly = false {
+        didSet {
+            guard oldValue != favoritesOnly else { return }
+            storageDefaults.set(favoritesOnly, forKey: "com.iptvplayer.favoritesOnly")
+            updateFilteredChannelsOnly()
+        }
+    }
+    @Published var recentlyAddedOnly = false {
+        didSet {
+            guard oldValue != recentlyAddedOnly else { return }
+            storageDefaults.set(recentlyAddedOnly, forKey: "com.iptvplayer.recentlyAddedOnly")
+            updateFilteredChannelsOnly()
+        }
+    }
+    @Published var minimumRating = 0.0 {
+        didSet {
+            guard oldValue != minimumRating else { return }
+            storageDefaults.set(minimumRating, forKey: "com.iptvplayer.minimumRating")
+            updateFilteredChannelsOnly()
+        }
+    }
+    @Published private(set) var isFilteringLibrary = false
+
     /// Current search query string.
     @Published public var searchText: String = "" {
         didSet {
             if oldValue != searchText {
-                updateFilteredChannelsOnly()
+                updateFilteredChannelsOnly(debounceSearch: true)
             }
         }
     }
@@ -511,6 +563,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func observeProgress() {
+        librarySortOrder = LibrarySortOrder(rawValue: storageDefaults.string(forKey: "com.iptvplayer.librarySort") ?? "") ?? .provider
+        favoritesOnly = storageDefaults.bool(forKey: "com.iptvplayer.favoritesOnly")
+        recentlyAddedOnly = storageDefaults.bool(forKey: "com.iptvplayer.recentlyAddedOnly")
+        let savedRating = storageDefaults.double(forKey: "com.iptvplayer.minimumRating")
+        minimumRating = [0, 6, 7, 8, 9].contains(savedRating) ? savedRating : 0
         if let data = storageDefaults.data(forKey: "com.iptvplayer.organization.v1"),
            let saved = try? JSONDecoder().decode(ChannelOrganization.self, from: data) { organization = saved }
         audioTracks.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
@@ -525,6 +582,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     deinit {
+        libraryFilterTask?.cancel()
         recoveryTask?.cancel()
         stallTask?.cancel()
         stablePlaybackTask?.cancel()
@@ -581,8 +639,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         updateFilteredChannelsOnly()
     }
     
-    /// Instant 0ms filtering when switching category or typing search queries.
-    public func updateFilteredChannelsOnly() {
+    /// Filter cached library data; expensive searches and sorts run away from playback's UI thread.
+    public func updateFilteredChannelsOnly(debounceSearch: Bool = false) {
+        libraryFilterTask?.cancel()
+        let revision = UUID()
+        libraryFilterRevision = revision
         var result = channels.filter { $0.contentType == selectedSection && visibleChannelIDs.contains($0.id) }
         
         // 1. Category Filtering
@@ -594,18 +655,76 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             result = result.filter { $0.displayGroup == selectedCategory }
         }
         
-        // 2. Search Text Filtering
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !query.isEmpty {
-            result = result.filter { item in
-                item.name.localizedCaseInsensitiveContains(query) ||
-                item.groupTitle.localizedCaseInsensitiveContains(query)
+        if favoritesOnly { result = result.filter { favoriteStreamURLs.contains($0.streamURL.absoluteString) } }
+        let query = Self.normalizedLibraryText(searchText.trimmingCharacters(in: .whitespacesAndNewlines))
+        let order = librarySortOrder
+        let cutoff = recentlyAddedOnly ? Date().addingTimeInterval(-30 * 86_400) : nil
+        let rating = minimumRating
+        let searchIndex = librarySearchTextByID
+        guard result.count > 1_000 && (!query.isEmpty || order != .provider || cutoff != nil || rating > 0) else {
+            isFilteringLibrary = false
+            filteredChannels = (try? Self.filterLibraryItems(result, query: query, searchIndex: searchIndex, order: order, addedSince: cutoff, minimumRating: rating)) ?? []
+            return
+        }
+        isFilteringLibrary = true
+        let candidates = result
+        let work = Task.detached(priority: .userInitiated) {
+            if debounceSearch && !query.isEmpty { try await Task.sleep(nanoseconds: 200_000_000) }
+            return try Self.filterLibraryItems(candidates, query: query, searchIndex: searchIndex, order: order, addedSince: cutoff, minimumRating: rating)
+        }
+        libraryFilterTask = Task { [weak self] in
+            do {
+                let filtered = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+                guard let self, !Task.isCancelled, self.libraryFilterRevision == revision else { return }
+                self.filteredChannels = filtered
+                self.isFilteringLibrary = false
+            } catch {
+                guard let self, self.libraryFilterRevision == revision else { return }
+                self.isFilteringLibrary = false
             }
         }
-        
-        self.filteredChannels = result
     }
-    
+
+    nonisolated private static func normalizedLibraryText(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+
+    nonisolated private static func filterLibraryItems(_ items: [M3UItem], query: String,
+                                                       searchIndex: [UUID: String], order: LibrarySortOrder,
+                                                       addedSince: Date?, minimumRating: Double) throws -> [M3UItem] {
+        var result = items
+        if !query.isEmpty || addedSince != nil || minimumRating > 0 {
+            let now = Date()
+            result = try items.enumerated().compactMap { index, item in
+                if index.isMultiple(of: 256) { try Task.checkCancellation() }
+                if !query.isEmpty && searchIndex[item.id]?.contains(query) != true { return nil }
+                if let addedSince, item.catalogDate.map({ $0 >= addedSince && $0 <= now }) != true { return nil }
+                if minimumRating > 0 && (item.rating ?? 0) < minimumRating { return nil }
+                return item
+            }
+        }
+        guard order != .provider else { return result }
+        var comparisons = 0
+        // Sort lightweight offsets rather than making a second array of full channel values.
+        var positions = Array(result.indices)
+        try positions.sort { left, right in
+            comparisons += 1
+            if comparisons.isMultiple(of: 1_024) { try Task.checkCancellation() }
+            if order == .recentlyAdded {
+                let lhs = result[left].catalogDate ?? .distantPast, rhs = result[right].catalogDate ?? .distantPast
+                return lhs == rhs ? left < right : lhs > rhs
+            }
+            if order == .highestRated {
+                let lhs = result[left].rating ?? -1, rhs = result[right].rating ?? -1
+                return lhs == rhs ? left < right : lhs > rhs
+            }
+            let comparison = result[left].name.localizedStandardCompare(result[right].name)
+            if comparison == .orderedSame { return left < right }
+            return order == .nameAscending ? comparison == .orderedAscending : comparison == .orderedDescending
+        }
+        return positions.map { result[$0] }
+    }
+
     // MARK: - Playlist Loading
 
     private func beginLibraryLoad() -> UUID {

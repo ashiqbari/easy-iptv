@@ -471,26 +471,6 @@ public struct IPTVPlaybackView: View {
                 
                 Spacer()
                 
-                // TV Series Episodes & Seasons Overview Button
-                if channel.contentType == .series {
-                    Button {
-                        manager.returnToSeries()
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: "square.grid.2x2.fill")
-                            Text("All Episodes")
-                        }
-                        .font(.caption.bold())
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.purple.opacity(0.85))
-                        .cornerRadius(6)
-                    }
-                    .buttonStyle(.plain)
-                    .help("View Series Overview & Seasons")
-                }
-                
                 // Live TV EPG Program Guide Button
                 if channel.contentType == .live || (!channel.isVOD && channel.contentType != .series) {
                     Button {
@@ -1345,20 +1325,6 @@ public struct IPTVPlaybackView: View {
                     .buttonStyle(.plain)
                 }
                 .padding([.top, .horizontal])
-                
-                Button {
-                    manager.returnToSeries()
-                } label: {
-                    Label("Back", systemImage: "chevron.left")
-                    .font(.caption.bold())
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.accentColor)
-                    .cornerRadius(6)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal)
                 
                 ScrollView {
                     LazyVStack(spacing: 6) {

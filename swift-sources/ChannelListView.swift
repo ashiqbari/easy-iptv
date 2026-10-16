@@ -7,6 +7,22 @@
 
 import SwiftUI
 
+enum LibrarySortOrder: String, CaseIterable, Sendable {
+    case provider, nameAscending, nameDescending, recentlyAdded, highestRated
+    var title: String {
+        switch self {
+        case .provider: return "Default order"
+        case .nameAscending: return "Name A–Z"
+        case .nameDescending: return "Name Z–A"
+        case .recentlyAdded: return "Recently added"
+        case .highestRated: return "Highest rated"
+        }
+    }
+    func title(for section: M3UItem.ContentType) -> String {
+        self == .recentlyAdded && section == .series ? "Recently added / updated" : title
+    }
+}
+
 /// Comprehensive channel catalog view with instant search filtering, category pill selection,
 /// favorite toggling, and visual indicators for currently playing streams.
 public struct ChannelListView: View {
@@ -61,6 +77,11 @@ public struct ChannelListView: View {
                 .opacity(manager.searchText.isEmpty ? 0 : 1)
                 .disabled(manager.searchText.isEmpty)
                 .accessibilityHidden(manager.searchText.isEmpty)
+
+                if manager.isFilteringLibrary {
+                    ProgressView().controlSize(.small).accessibilityLabel("Updating results")
+                }
+                LibraryFilterControl(manager: manager)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -73,7 +94,6 @@ public struct ChannelListView: View {
             // Horizontal Category Selector Pills
             categoryFilterBar
                 .padding(.bottom, 10)
-                .background(categoryBarBackground)
 
             if manager.selectedCategory == "Recently Watched", !manager.recentlyWatchedChannels.isEmpty {
                 HStack {
@@ -91,6 +111,8 @@ public struct ChannelListView: View {
             // Channel List
             if manager.isLoading {
                 loadingView
+            } else if manager.isFilteringLibrary && manager.filteredChannels.isEmpty {
+                ProgressView("Updating results…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if manager.filteredChannels.isEmpty {
                 emptyChannelsView
             } else {
@@ -129,42 +151,36 @@ public struct ChannelListView: View {
     
     /// Provider categories belong in the sidebar, not the top shortcuts.
     private var categoryFilterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(Self.categoryShortcuts, id: \.self) { category in
-                    let isSelected = manager.selectedCategory == category
-                    Button {
-                        manager.selectedCategory = category
-                    } label: {
-                        HStack(spacing: 6) {
-                            if category == "Favorites" || category == "★ Favorites" {
-                                Image(systemName: "star.fill")
-                                    .font(.caption2)
-                                Text("Favorites")
-                                    .font(.subheadline.weight(isSelected ? .semibold : .regular))
-                            } else {
-                                Image(systemName: category == "All" ? "square.grid.2x2" : "clock.arrow.circlepath")
-                                    .font(.caption2)
-                                Text(category)
-                                    .font(.subheadline.weight(isSelected ? .semibold : .regular))
-                            }
+        HStack(spacing: 6) {
+            ForEach(Self.categoryShortcuts, id: \.self) { category in
+                let isSelected = manager.selectedCategory == category
+                Button { manager.selectedCategory = category } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: category == "Favorites" ? "star.fill" :
+                              (category == "All" ? "square.grid.2x2" : "clock.arrow.circlepath"))
+                            .font(.caption2).frame(width: 14)
+                        ViewThatFits(in: .horizontal) {
+                            Text(category).fixedSize(horizontal: true, vertical: false)
+                            Text(category == "Recently Watched" ? "Recent" : category)
+                                .lineLimit(1).minimumScaleFactor(0.85)
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .background(
-                            isSelected ? Color.accentColor : Color.secondary.opacity(0.15)
-                        )
-                        .foregroundColor(isSelected ? (palette.navy ? .black : .white) : .primary)
-                        .clipShape(Capsule())
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 6)
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 32)
+                    .foregroundStyle(isSelected ? (palette.navy ? Color.black : .white) : .primary)
+                    .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                    .contentShape(Capsule())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel(category)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .help(category)
             }
-            .padding(.horizontal)
         }
+        .padding(.horizontal, 12)
     }
-    
+
     /// Main Channel List
     private var channelListContent: some View {
         Group {
@@ -251,6 +267,11 @@ public struct ChannelListView: View {
                 
                 Button("Clear Search", action: clearSearch)
                 .buttonStyle(.borderedProminent)
+            } else if manager.favoritesOnly || manager.recentlyAddedOnly || manager.minimumRating > 0 {
+                Text("No items match these filters.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Clear filters") { manager.resetLibraryFilters() }
+                    .buttonStyle(.borderedProminent)
             } else if manager.selectedCategory == "Recently Watched" {
                 Text("\(manager.selectedSection.rawValue) you play will appear here, newest first.")
                     .font(.caption)
@@ -280,7 +301,6 @@ public struct ChannelListView: View {
         .padding()
     }
     
-    private var categoryBarBackground: Color { palette.background }
 
 }
 
@@ -383,5 +403,72 @@ public struct ChannelRowView: View {
         Image(systemName: channel.contentType.iconName)
             .foregroundColor(.secondary)
             .font(.system(size: 20))
+    }
+}
+
+
+struct LibraryFilterControl: View {
+    @ObservedObject var manager: IPTVPlayerManager
+    @State private var showing = false
+    var body: some View {
+        Button { showing.toggle() } label: {
+            Image(systemName: manager.libraryFiltersActive ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityLabel("Sort and filter")
+        .help("Sort and filter the library")
+        .popover(isPresented: $showing) {
+            LibraryFilterPanel(manager: manager, showing: $showing)
+        }
+    }
+}
+
+private struct LibraryFilterPanel: View {
+    @ObservedObject var manager: IPTVPlayerManager
+    @Binding var showing: Bool
+    @Environment(\.appPalette) private var palette
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Sort and filter").font(.headline)
+                Spacer()
+                Button("Done") { showing = false }
+            }
+            ForEach(LibrarySortOrder.allCases, id: \.self) { order in
+                Button { manager.librarySortOrder = order } label: {
+                    HStack {
+                        Text(order.title(for: manager.selectedSection))
+                        Spacer()
+                        if manager.librarySortOrder == order { Image(systemName: "checkmark") }
+                    }.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled((order == .recentlyAdded && !manager.hasCatalogDates) || (order == .highestRated && !manager.hasRatings))
+                .accessibilityLabel(order.title(for: manager.selectedSection))
+                .accessibilityAddTraits(manager.librarySortOrder == order ? .isSelected : [])
+            }
+            Divider()
+            Toggle("Favorites only", isOn: $manager.favoritesOnly)
+            Toggle(manager.selectedSection == .series ? "Added / updated in the last 30 days" : "Added in the last 30 days", isOn: $manager.recentlyAddedOnly)
+                .disabled(!manager.hasCatalogDates)
+            Picker("Minimum rating", selection: $manager.minimumRating) {
+                Text("Any rating").tag(0.0)
+                ForEach([6.0, 7.0, 8.0, 9.0], id: \.self) { rating in
+                    Text("\(Int(rating))+ / 10").tag(rating)
+                }
+            }.disabled(!manager.hasRatings)
+            if manager.selectedSection == .series {
+                Text("Series recency uses the added date, or the provider’s last update when no added date is available.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !manager.hasCatalogDates || !manager.hasRatings {
+                Text("Added dates and ratings depend on your provider. Missing values are excluded when their filter is active.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Reset sort and filters") { manager.resetLibraryFilters() }
+                .disabled(!manager.libraryFiltersActive)
+        }
+        .padding(16).frame(width: 280).background(palette.surface)
     }
 }

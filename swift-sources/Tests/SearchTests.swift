@@ -241,6 +241,7 @@ final class SearchTests: XCTestCase {
         manager.selectedCategory = "Favorites"
         XCTAssertTrue(manager.filteredChannels.isEmpty)
         manager.selectedCategory = "All"
+        try await waitForLibraryFilter(manager)
         XCTAssertEqual(manager.filteredChannels.map(\.id), [items[9999].id])
         XCTAssertEqual(manager.searchText, "Movie 9999")
         manager.searchText = ""
@@ -272,6 +273,7 @@ final class SearchTests: XCTestCase {
         manager.selectedCategory = "Even"
         let playing = try XCTUnwrap(manager.currentChannel?.id)
         manager.searchText = "Movie 9998"
+        try await waitForLibraryFilter(manager)
         XCTAssertEqual(manager.filteredChannels.count, 1)
         let view = ChannelListView(manager: manager)
         #if os(macOS)
@@ -298,6 +300,7 @@ final class SearchTests: XCTestCase {
         while !manager.searchText.isEmpty { manager.searchText.removeLast() }
         XCTAssertEqual(manager.filteredChannels.map(\.id), clearedIDs)
         manager.searchText = "no matching title"
+        try await waitForLibraryFilter(manager)
         XCTAssertTrue(manager.filteredChannels.isEmpty)
         view.clearSearch()
         XCTAssertEqual(manager.filteredChannels.map(\.id), clearedIDs)

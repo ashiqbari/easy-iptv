@@ -7,6 +7,28 @@
 
 import Foundation
 
+private extension KeyedDecodingContainer {
+    func catalogNumber(_ key: Key) -> Double? {
+        let value = (try? decode(Double.self, forKey: key)) ?? (try? decode(String.self, forKey: key)).flatMap(Double.init)
+        return value.flatMap { $0.isFinite ? $0 : nil }
+    }
+    func catalogRating(ten: Key, five: Key) -> Double? {
+        if let value = catalogNumber(ten), value > 0 && value <= 10 { return value }
+        if let value = catalogNumber(five), value > 0 && value <= 5 { return value * 2 }
+        return nil
+    }
+}
+
+private enum CatalogRatingKeys: String, CodingKey {
+    case rating
+    case rating5Based = "rating_5based"
+}
+
+private func catalogAddedDate(_ value: String?) -> Date? {
+    guard let value, let seconds = Double(value), seconds.isFinite, seconds > 0, seconds <= 253402300799 else { return nil }
+    return Date(timeIntervalSince1970: seconds)
+}
+
 // MARK: - Xtream Codes Data Models
 
 /// Account and subscription information returned by `player_api.php`.
@@ -119,6 +141,7 @@ public struct XtreamLiveStream: Codable, Sendable {
     public let streamIcon: String?
     public let epgChannelId: String?
     public let added: String?
+    public var addedAt: Date? { catalogAddedDate(added) }
     public let categoryId: String?
     public let customSid: String?
     public let tvArchive: Int?
@@ -147,7 +170,7 @@ public struct XtreamLiveStream: Codable, Sendable {
         self.streamType = try? container.decodeIfPresent(String.self, forKey: .streamType)
         self.streamIcon = try? container.decodeIfPresent(String.self, forKey: .streamIcon)
         self.epgChannelId = try? container.decodeIfPresent(String.self, forKey: .epgChannelId)
-        self.added = try? container.decodeIfPresent(String.self, forKey: .added)
+        self.added = (try? container.decode(String.self, forKey: .added)) ?? container.catalogNumber(.added).map { String($0) }
         self.categoryId = try? container.decodeIfPresent(String.self, forKey: .categoryId)
         self.customSid = try? container.decodeIfPresent(String.self, forKey: .customSid)
         self.tvArchive = (try? container.decode(Int.self, forKey: .tvArchive)) ?? (try? container.decode(String.self, forKey: .tvArchive)).flatMap(Int.init)
@@ -170,6 +193,9 @@ public struct XtreamVodStream: Codable, Sendable {
     public let name: String
     public let streamIcon: String?
     public let categoryId: String?
+    public let added: String?
+    public let rating: Double?
+    public var addedAt: Date? { catalogAddedDate(added) }
     public let containerExtension: String?
     
     enum CodingKeys: String, CodingKey {
@@ -177,6 +203,7 @@ public struct XtreamVodStream: Codable, Sendable {
         case name
         case streamIcon = "stream_icon"
         case categoryId = "category_id"
+        case added, rating
         case containerExtension = "container_extension"
     }
     
@@ -185,6 +212,8 @@ public struct XtreamVodStream: Codable, Sendable {
         self.name = (try? container.decode(String.self, forKey: .name)) ?? "Movie"
         self.streamIcon = try? container.decodeIfPresent(String.self, forKey: .streamIcon)
         self.categoryId = try? container.decodeIfPresent(String.self, forKey: .categoryId)
+        self.added = (try? container.decode(String.self, forKey: .added)) ?? container.catalogNumber(.added).map { String($0) }
+        self.rating = try decoder.container(keyedBy: CatalogRatingKeys.self).catalogRating(ten: .rating, five: .rating5Based)
         self.containerExtension = try? container.decodeIfPresent(String.self, forKey: .containerExtension)
         
         if let idInt = try? container.decode(Int.self, forKey: .streamId) {
@@ -203,12 +232,19 @@ public struct XtreamSeriesItem: Codable, Sendable {
     public let name: String
     public let cover: String?
     public let categoryId: String?
+    public let added: String?
+    public let lastModified: String?
+    public let rating: Double?
+    public var addedAt: Date? { catalogAddedDate(added) }
+    public var updatedAt: Date? { catalogAddedDate(lastModified) }
     
     enum CodingKeys: String, CodingKey {
         case seriesId = "series_id"
         case name
         case cover
         case categoryId = "category_id"
+        case added, rating
+        case lastModified = "last_modified"
     }
     
     public init(from decoder: Decoder) throws {
@@ -216,6 +252,9 @@ public struct XtreamSeriesItem: Codable, Sendable {
         self.name = (try? container.decode(String.self, forKey: .name)) ?? "TV Series"
         self.cover = try? container.decodeIfPresent(String.self, forKey: .cover)
         self.categoryId = try? container.decodeIfPresent(String.self, forKey: .categoryId)
+        self.added = (try? container.decode(String.self, forKey: .added)) ?? container.catalogNumber(.added).map { String($0) }
+        self.lastModified = (try? container.decode(String.self, forKey: .lastModified)) ?? container.catalogNumber(.lastModified).map { String($0) }
+        self.rating = try decoder.container(keyedBy: CatalogRatingKeys.self).catalogRating(ten: .rating, five: .rating5Based)
         
         if let idInt = try? container.decode(Int.self, forKey: .seriesId) {
             self.seriesId = idInt
@@ -356,7 +395,8 @@ public actor XtreamCodesManager {
                 isFavorite: false,
                 contentType: .live,
                 catchup: stream.tvArchive == 1 && (stream.tvArchiveDuration ?? 0) > 0
-                    ? CatchupInfo(mode: "xc", days: stream.tvArchiveDuration ?? 0, source: nil, timezone: zone) : nil
+                    ? CatchupInfo(mode: "xc", days: stream.tvArchiveDuration ?? 0, source: nil, timezone: zone) : nil,
+                addedAt: stream.addedAt
             )
         }
     }
@@ -400,7 +440,9 @@ public actor XtreamCodesManager {
                 streamURL: finalURL,
                 isFavorite: false,
                 contentType: .movie,
-                mediaID: String(vod.streamId)
+                mediaID: String(vod.streamId),
+                addedAt: vod.addedAt,
+                rating: vod.rating
             )
         }
     }
@@ -443,7 +485,10 @@ public actor XtreamCodesManager {
                 streamURL: finalURL,
                 isFavorite: false,
                 contentType: .series,
-                seriesID: String(show.seriesId)
+                seriesID: String(show.seriesId),
+                addedAt: show.addedAt,
+                updatedAt: show.updatedAt,
+                rating: show.rating
             )
         }
     }
