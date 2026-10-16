@@ -253,10 +253,9 @@ public struct IPTVPlaybackView: View {
                             }
                         SubtitleOverlay(controller: manager.subtitles, controlsVisible: manager.showVideoControls)
                         if manager.isBuffering { bufferingOverlay }
-                        if let errorMsg = manager.errorMessage { errorOverlay(message: errorMsg) }
                         if manager.showVideoControls { controlsOverlay }
                         if manager.showingEpisodesDrawer && manager.currentChannel?.contentType == .series && !manager.seriesEpisodes.isEmpty {
-                            episodesDrawerOverlay
+                            EpisodePlaybackPanel(manager: manager)
                         }
                     } else {
                         bufferingOverlay
@@ -271,6 +270,11 @@ public struct IPTVPlaybackView: View {
             .opacity(manager.isViewingMovieDetails || manager.isViewingSeriesDetails ? 0 : 1)
             .allowsHitTesting(!manager.isViewingMovieDetails && !manager.isViewingSeriesDetails)
             .accessibilityHidden(manager.isViewingMovieDetails || manager.isViewingSeriesDetails)
+
+            if !manager.isViewingMovieDetails, !manager.isViewingSeriesDetails,
+               manager.player != nil || manager.useVLCPlayback, let message = manager.errorMessage {
+                errorOverlay(message: message)
+            }
 
             if manager.isViewingMovieDetails, let movie = manager.movieOverviewItem {
                 MovieDetailsView(item: movie, manager: manager)
@@ -346,11 +350,6 @@ public struct IPTVPlaybackView: View {
                     bufferingOverlay
                 }
                 
-                // Error Alert Overlay with Instant Format Fix Buttons
-                if let errorMsg = manager.errorMessage {
-                    errorOverlay(message: errorMsg)
-                }
-                
                 // HUD Controls Overlay
                 if manager.showVideoControls {
                     controlsOverlay
@@ -359,7 +358,7 @@ public struct IPTVPlaybackView: View {
                 
                 // Series Episodes Slide-in Drawer (Only for TV Shows during playback)
                 if manager.showingEpisodesDrawer && manager.currentChannel?.contentType == .series && !manager.seriesEpisodes.isEmpty {
-                    episodesDrawerOverlay
+                    EpisodePlaybackPanel(manager: manager)
                         .transition(.move(edge: .trailing))
                 }
         } else {
@@ -379,8 +378,10 @@ public struct IPTVPlaybackView: View {
             Spacer()
             
             // Center Play / Pause & Skip HUD
-            centerControls.playbackControlHover(manager, region: "centerControls")
-                .onDisappear { manager.setControlsInteraction("centerControls", active: false) }
+            if manager.errorMessage == nil {
+                centerControls.playbackControlHover(manager, region: "centerControls")
+                    .onDisappear { manager.setControlsInteraction("centerControls", active: false) }
+            }
             
             Spacer()
             
@@ -452,7 +453,8 @@ public struct IPTVPlaybackView: View {
                 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 8) {
-                        Text(channel.name)
+                        Text(channel.playbackTitle)
+                            .help(channel.name)
                             .font(.headline)
                             .foregroundColor(.white)
                             .lineLimit(1)
@@ -464,9 +466,11 @@ public struct IPTVPlaybackView: View {
                         }
                     }
                     
-                    Text(channel.displayGroup)
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.75))
+                    if channel.contentType != .series {
+                        Text(channel.displayGroup)
+                            .font(.caption)
+                            .foregroundColor(.white.opacity(0.75))
+                    }
                 }
                 
                 Spacer()
@@ -650,7 +654,7 @@ public struct IPTVPlaybackView: View {
                     
                     Slider(
                         value: Binding(
-                            get: { manager.currentTime },
+                            get: { manager.duration > 0 ? min(manager.currentTime, manager.duration) : 0 },
                             set: { newVal in
                                 manager.isSeeking = true
                                 manager.currentTime = newVal
@@ -665,6 +669,9 @@ public struct IPTVPlaybackView: View {
                         }
                     )
                     
+                    .disabled(manager.duration <= 0)
+                    .help(manager.duration > 0 ? "Seek within this programme" : "The stream has not provided its duration yet")
+
                     Text(manager.duration > 0 ? manager.formattedDuration : "--:--")
                         .font(.caption.monospacedDigit())
                         .foregroundColor(.white.opacity(0.7))
@@ -725,7 +732,7 @@ public struct IPTVPlaybackView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "list.number")
-                    Text("Episodes (\(manager.seriesEpisodes.count))")
+                    Text("Episodes (\(manager.filteredEpisodesForSelectedSeason.count))")
                 }
                 .font(.caption.bold())
                 .foregroundColor(.white)
@@ -875,6 +882,9 @@ public struct IPTVPlaybackView: View {
                 .frame(maxWidth: 340)
 
             Button("Try Again") { manager.retryCurrentStream() }.buttonStyle(.borderedProminent)
+            if manager.canStartOverAfterResumeFailure {
+                Button("Start over") { manager.startCurrentStreamOver() }.buttonStyle(.borderedProminent)
+            }
 
             #if os(macOS)
             Button {
@@ -1299,17 +1309,26 @@ public struct IPTVPlaybackView: View {
         }
     }
     
-    /// Slide-in drawer for TV Series episodes browsing and selection.
-    private var episodesDrawerOverlay: some View {
-        HStack {
-            Spacer()
+}
+
+/// Grows to ten rows, then scrolls within the player's available height.
+struct EpisodePlaybackPanel: View {
+    @ObservedObject var manager: IPTVPlayerManager
+    @Environment(\.appPalette) private var palette
+    @State private var episodePreviewHeight: CGFloat = 440
+    @State private var episodeHeaderHeight: CGFloat = 48
+
+    var body: some View {
+        GeometryReader { geometry in
+            let episodes = manager.filteredEpisodesForSelectedSeason
+            let listHeight = min(episodePreviewHeight, max(0, geometry.size.height - episodeHeaderHeight - 12 - 16 - 32))
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Series Episodes")
+                        Text(episodes.first?.groupTitle ?? "Series Episodes")
                             .font(.headline.bold())
                             .foregroundColor(.primary)
-                        Text("\(manager.seriesEpisodes.count) episode\(manager.seriesEpisodes.count == 1 ? "" : "s") available")
+                        Text("\(episodes.count) episode\(episodes.count == 1 ? "" : "s") available")
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
@@ -1324,48 +1343,61 @@ public struct IPTVPlaybackView: View {
                     .buttonStyle(.plain)
                 }
                 .padding([.top, .horizontal])
-                
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { episodeHeaderHeight = $0 }
+
                 ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(manager.seriesEpisodes) { ep in
-                            Button {
-                                manager.playDirectStream(ep)
-                                manager.showingEpisodesDrawer = false
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: manager.currentChannel?.streamURL == ep.streamURL ? "speaker.wave.2.fill" : "play.circle.fill")
-                                        .font(.title3)
-                                        .foregroundColor(manager.currentChannel?.streamURL == ep.streamURL ? Color.accentColor : .secondary)
-                                    
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(ep.name)
-                                            .font(.subheadline.weight(.medium))
-                                            .foregroundColor(.primary)
-                                            .lineLimit(1)
-                                        Text(ep.groupTitle)
-                                            .font(.caption2)
-                                            .foregroundColor(.secondary)
-                                        MediaProgressView(store: manager.progressStore, item: ep)
-                                    }
-                                    Spacer()
-                                }
-                                .padding(10)
-                                .background(manager.currentChannel?.streamURL == ep.streamURL ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.05))
-                                .cornerRadius(8)
+                    VStack(spacing: 6) {
+                        VStack(spacing: 6) {
+                            ForEach(episodes.prefix(10)) { playbackEpisodeRow($0) }
+                        }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { episodePreviewHeight = $0 }
+                        if episodes.count > 10 {
+                            LazyVStack(spacing: 6) {
+                                ForEach(episodes.dropFirst(10)) { playbackEpisodeRow($0) }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                     .padding(.horizontal)
                 }
+                .frame(height: listHeight)
             }
-            .frame(width: 320)
+            .padding(.bottom, 16)
+            .frame(width: min(320, max(0, geometry.size.width - 32)))
             .background(palette.surface)
             .cornerRadius(12)
-            .padding()
             .shadow(radius: 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            .padding(16)
         }
     }
+
+    private func playbackEpisodeRow(_ ep: M3UItem) -> some View {
+        Button {
+            manager.playDirectStream(ep)
+            manager.showingEpisodesDrawer = false
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: manager.currentChannel?.streamURL == ep.streamURL ? "speaker.wave.2.fill" : "play.circle.fill")
+                    .font(.title3)
+                    .foregroundColor(manager.currentChannel?.streamURL == ep.streamURL ? Color.accentColor : .secondary)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ep.playbackTitle)
+                        .help(ep.name)
+                        .font(.subheadline.weight(.medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    MediaProgressView(store: manager.progressStore, item: ep)
+                }
+                Spacer()
+            }
+            .padding(10)
+            .background(manager.currentChannel?.streamURL == ep.streamURL ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.05))
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+    }
+
 }
 
 struct MediaProgressView: View {

@@ -40,7 +40,7 @@ struct DashboardView: View {
                     if !resumeItems.isEmpty {
                         sectionHeader("Continue watching", subtitle: "Pick up where you left off", icon: "play.circle.fill")
                         DashboardShelf(items: resumeItems, width: width, cardWidth: min(280, max(140, width - 6))) { entry in
-                            Button { manager.playRecentlyWatched(entry.item) } label: {
+                            Button { manager.playRecentlyWatched(entry.item, resumeSeries: true) } label: {
                                 mediaCard(entry.item, subtitle: entry.subtitle, progress: entry.progress.fraction,
                                           width: min(280, max(140, width - 6)), large: true)
                             }

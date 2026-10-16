@@ -32,6 +32,66 @@ final class SidebarLayoutTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testSectionTabClicksAndHighlightStayInSync() async throws {
+        _ = NSApplication.shared
+        let suite = "section-tabs-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 260, height: 38),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { manager.stop(); window.close(); defaults.removePersistentDomain(forName: suite) }
+        for appearance in [AppearancePreference.light, .dark, .forest] {
+            let palette = AppPalette(appearance: appearance)
+            let hosting = NSHostingView(rootView: LibrarySectionTabs(manager: manager)
+                .environment(\.appPalette, palette).preferredColorScheme(appearance.colorScheme))
+            window.contentView = hosting
+            window.makeKeyAndOrderFront(nil)
+            for width in [260.0, 420.0] {
+                window.setContentSize(CGSize(width: width, height: 38))
+                func settle() async throws {
+                    for _ in 0..<10 {
+                        hosting.layoutSubtreeIfNeeded()
+                        try await Task.sleep(nanoseconds: 20_000_000)
+                    }
+                }
+                func checkHighlight(_ selected: M3UItem.ContentType?) throws {
+                    let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
+                    hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+                    for (index, section) in M3UItem.ContentType.allCases.enumerated() {
+                        let x = 12 + CGFloat(index) * (width - 6) / 3
+                        let color = try XCTUnwrap(bitmap.colorAt(x: Int(x * CGFloat(bitmap.pixelsWide) / width),
+                            y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
+                        let components = [color.redComponent, color.greenComponent, color.blueComponent]
+                        let isHighlighted = components.max()! - components.min()! > 0.2
+                        XCTAssertEqual(isHighlighted, selected == section,
+                                       "Only \(String(describing: selected)) should be highlighted in \(appearance)")
+                    }
+                }
+                manager.showingDashboard = true
+                try await settle()
+                try checkHighlight(nil)
+                for section in [M3UItem.ContentType.series, .live, .movie, .series, .movie, .live] {
+                    let index = try XCTUnwrap(M3UItem.ContentType.allCases.firstIndex(of: section))
+                    let point = CGPoint(x: width * (CGFloat(index) + 0.5) / 3, y: hosting.bounds.midY)
+                    let location = hosting.convert(point, to: nil)
+                    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        NSApp.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location,
+                            modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+                    }
+                    try await settle()
+                    XCTAssertFalse(manager.showingDashboard)
+                    XCTAssertEqual(manager.selectedSection, section)
+                    try checkHighlight(section)
+                }
+                manager.browse(.series)
+                try await settle()
+                try checkHighlight(.series)
+            }
+        }
+    }
+
     func testChannelPanelStaysBelowHeaderAcrossTogglesAndWindowSizes() async throws {
         let manager = manager()
         let hosting = NSHostingView(rootView: ContentView(manager: manager))

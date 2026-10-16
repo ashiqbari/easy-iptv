@@ -317,6 +317,37 @@ final class PlaybackProgressTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testVLCResumeDoesNotRequireKnownDurationAndBoundsSeekTargets() {
+        XCTAssertEqual(IPTVPlayerManager.vlcResumeTime(position: 120, seekable: true, duration: 0), 120_000)
+        XCTAssertEqual(IPTVPlayerManager.vlcResumeTime(position: 120, seekable: true, duration: .nan), 120_000)
+        XCTAssertEqual(IPTVPlayerManager.vlcResumeTime(position: 120, seekable: true, duration: 60), 59_000)
+        XCTAssertNil(IPTVPlayerManager.vlcResumeTime(position: 120, seekable: false, duration: 300))
+        XCTAssertNil(IPTVPlayerManager.vlcResumeTime(position: .infinity, seekable: true, duration: 0))
+        XCTAssertNil(IPTVPlayerManager.vlcResumeTime(position: -1, seekable: true, duration: 0))
+        XCTAssertEqual(IPTVPlayerManager.vlcResumeTime(position: .greatestFiniteMagnitude, seekable: true, duration: 0), .max)
+    }
+
+    @MainActor func testFailedResumeRetryPreservesBookmarkAndExplicitStartOverClearsIt() throws {
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        let item = media()
+        manager.progressStore.save(item: item, position: 120, duration: 300)
+        manager.playDirectStream(item)
+        manager.resolveResume(try XCTUnwrap(manager.resumeRequest), startOver: false)
+        manager.errorMessage = "Resume failed"
+        XCTAssertTrue(manager.canStartOverAfterResumeFailure)
+        manager.retryCurrentStream()
+        manager.errorMessage = "Resume failed again"
+        XCTAssertTrue(manager.canStartOverAfterResumeFailure)
+        XCTAssertEqual(manager.progressStore.progress(for: item)?.position, 120)
+        manager.startCurrentStreamOver()
+        XCTAssertFalse(manager.canStartOverAfterResumeFailure)
+        XCTAssertNil(manager.progressStore.progress(for: item))
+        XCTAssertNil(manager.errorMessage)
+        XCTAssertEqual(manager.currentChannel?.id, item.id)
+        XCTAssertNotNil(manager.player)
+    }
+
     @MainActor func testVLCExitReleasesActivePlayerAndCannotRestartFromSeries() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }

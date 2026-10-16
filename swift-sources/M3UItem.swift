@@ -70,6 +70,12 @@ public struct M3UItem: Identifiable, Hashable, Codable, Sendable {
     public var catalogDate: Date? { addedAt ?? updatedAt }
     public let rating: Double?
 
+    var playbackTitle: String {
+        guard contentType == .series, let episodeNumber else { return name }
+        let season = seasonNumber.map { "Season \($0)" } ?? groupTitle
+        return "\(season) · Episode \(episodeNumber)"
+    }
+
     /// The stream URL scopes IDs to their provider/account and distinguishes M3U episodes.
     public var subtitleCacheKey: String {
         [streamURL.absoluteString, contentType.rawValue, mediaID ?? "", seriesID ?? "",

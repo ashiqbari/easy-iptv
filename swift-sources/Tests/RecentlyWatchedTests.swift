@@ -88,7 +88,38 @@ final class RecentlyWatchedTests: XCTestCase {
         XCTAssertFalse(manager.recentlyWatchedStore.records.contains { $0.contentType == .movie })
     }
 
-    func testSeriesHistoryLoadsAndResumesLatestEpisodeOrReportsUnavailable() async throws {
+    func testSeriesHistoryOpensDetailsWithoutStartingOrResumingAnEpisode() async throws {
+        let suite = "recent-series-browse-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let show = media(100, type: .series)
+        let episode = media(2, type: .series, episode: 2)
+        var loader = LibraryLoader()
+        loader.seriesDetails = { _ in SeriesDetails(details: nil, episodes: [episode]) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer { manager.stop(); defaults.removePersistentDomain(forName: suite) }
+        manager.progressStore.save(item: episode, position: 120, duration: 600)
+        for lastWatched in [episode, media(9, type: .series, episode: 9)] {
+            manager.recentlyWatchedStore.record(lastWatched, series: show)
+            manager.playRecentlyWatched(show)
+            for _ in 0..<100 {
+                if !manager.isLoadingEpisodes { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            XCTAssertFalse(manager.isLoadingEpisodes)
+            XCTAssertFalse(manager.showingDashboard)
+            XCTAssertTrue(manager.isViewingSeriesDetails)
+            XCTAssertEqual(manager.downloadSeriesItem?.id, show.id)
+            XCTAssertEqual(manager.seriesEpisodes.map(\.id), [episode.id])
+            XCTAssertNil(manager.currentChannel)
+            XCTAssertNil(manager.player)
+            XCTAssertFalse(manager.useVLCPlayback)
+            XCTAssertNil(manager.resumeRequest)
+            XCTAssertNil(manager.errorMessage)
+            XCTAssertEqual(manager.progressStore.progress(for: episode)?.position, 120)
+        }
+    }
+
+    func testContinueWatchingLoadsAndResumesLatestEpisodeOrReportsUnavailable() async throws {
         let suite = "recent-resume-tests-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
         let show = media(100, type: .series)
@@ -103,7 +134,7 @@ final class RecentlyWatchedTests: XCTestCase {
         defer { manager.stop(); defaults.removePersistentDomain(forName: suite) }
         manager.recentlyWatchedStore.record(last, series: show)
         manager.progressStore.save(item: last, position: 120, duration: 600)
-        manager.playRecentlyWatched(show)
+        manager.playRecentlyWatched(show, resumeSeries: true)
         for _ in 0..<100 {
             if !manager.isLoadingEpisodes { break }
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -114,7 +145,7 @@ final class RecentlyWatchedTests: XCTestCase {
         XCTAssertNotNil(manager.player)
         manager.stop()
         manager.recentlyWatchedStore.record(media(9, type: .series, episode: 9), series: show)
-        manager.playRecentlyWatched(show)
+        manager.playRecentlyWatched(show, resumeSeries: true)
         for _ in 0..<100 {
             if !manager.isLoadingEpisodes { break }
             try await Task.sleep(nanoseconds: 10_000_000)

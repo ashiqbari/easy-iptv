@@ -6,6 +6,47 @@ import AppKit
 @testable import EasyIPTV
 
 final class SeriesDetailsTests: XCTestCase {
+    func testPlaybackTitlesKeepEpisodeNumbersVisible() {
+        let url = URL(string: "https://fixture.invalid/episode.mp4")!
+        let title = "S2 • A very long provider title with the episode number hidden at the end S02E03"
+        let episode = M3UItem(name: title, groupTitle: "Season 2", streamURL: url,
+                              contentType: .series, seasonNumber: 2, episodeNumber: 3)
+        XCTAssertEqual(episode.playbackTitle, "Season 2 · Episode 3")
+        XCTAssertEqual(episode.name, title)
+        let grouped = M3UItem(name: title, groupTitle: "Specials", streamURL: url, contentType: .series, episodeNumber: 4)
+        XCTAssertEqual(grouped.playbackTitle, "Specials · Episode 4")
+        let missing = M3UItem(name: title, streamURL: url, contentType: .series)
+        XCTAssertEqual(missing.playbackTitle, title, "Missing episode numbers must not be guessed")
+        let movie = M3UItem(name: "Movie title", streamURL: url, contentType: .movie, episodeNumber: 3)
+        XCTAssertEqual(movie.playbackTitle, "Movie title")
+    }
+
+    @MainActor func testPlaybackSeasonFollowsEpisodeAndRestoresAfterBrowsingAnotherShow() {
+        let suite = "playback-season-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites(); defaults.removePersistentDomain(forName: suite) }
+        let episodes: [M3UItem] = (1...2).flatMap { (season: Int) in
+            (1...2).map { (episode: Int) in
+                M3UItem(name: "Episode \(episode)", groupTitle: "Season \(season)",
+                        streamURL: URL(fileURLWithPath: "/private/tmp/season-\(season)-episode-\(episode).mp4"),
+                        contentType: .series, seasonNumber: season, episodeNumber: episode)
+            }
+        }
+        manager.seriesEpisodes = episodes
+        manager.selectSeason("Season 2")
+        manager.playDirectStream(episodes[2])
+        XCTAssertEqual(manager.selectedSeason, "Season 2")
+        XCTAssertEqual(manager.filteredEpisodesForSelectedSeason.map(\.id), Array(episodes.suffix(2)).map(\.id))
+        manager.fetchAndShowSeries(show("other"))
+        manager.selectSeason("Season 9")
+        manager.dismissDetails()
+        XCTAssertEqual(manager.selectedSeason, "Season 2")
+        XCTAssertEqual(manager.filteredEpisodesForSelectedSeason.count, 2)
+        manager.playDirectStream(episodes[0])
+        XCTAssertEqual(manager.selectedSeason, "Season 1")
+        XCTAssertEqual(manager.filteredEpisodesForSelectedSeason.map(\.id), Array(episodes.prefix(2)).map(\.id))
+    }
+
     @MainActor func testBrowsingAnotherShowKeepsPlayingEpisodeContextAndHighlight() async throws {
         let suite = "series-browsing-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!

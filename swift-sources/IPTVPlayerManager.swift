@@ -911,11 +911,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         updateFilteredChannelsOnly()
     }
 
-    func playRecentlyWatched(_ item: M3UItem) {
+    func playRecentlyWatched(_ item: M3UItem, resumeSeries: Bool = false) {
         showingDashboard = false
         guard let record = recentlyWatchedRecord(for: item) else { return }
         if item.contentType == .series {
-            fetchAndShowSeries(item, recentEpisodeKey: record.episodeKey)
+            fetchAndShowSeries(item, recentEpisodeKey: resumeSeries ? record.episodeKey : nil)
         } else if item.contentType == .movie {
             stop()
             continueWatching(item)
@@ -968,6 +968,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         seriesOverviewItem = playingSeries?.item
         seriesEpisodes = playingSeries?.episodes ?? []
         seriesDetails = playingSeries?.details
+        if let currentChannel, currentChannel.contentType == .series { selectedSeason = currentChannel.groupTitle }
         seriesDetailsFailed = false
     }
 
@@ -1044,7 +1045,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         recoveryAttempts = recoveryAttempt
         recordedCurrentPlayback = false
         resumeRequest = nil
-        pendingResumePosition = position.flatMap { $0 > 0 ? $0 : nil }
+        pendingResumePosition = position.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
         wantsPlayback = true
         playbackFinished = false
         if position == nil, progressStore.progress(for: item)?.completed == true { progressStore.clear(item) }
@@ -1055,6 +1056,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         #endif
         self.currentChannel = item
         if !preservingDetails, item.contentType == .series {
+            selectedSeason = item.groupTitle
             playingSeries = (seriesOverviewItem, seriesEpisodes, seriesDetails)
         } else if !preservingDetails {
             playingSeries = nil
@@ -1123,6 +1125,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                          preservingDetails: isViewingMovieDetails || isViewingSeriesDetails)
     }
 
+    nonisolated static func vlcResumeTime(position: Double, seekable: Bool, duration: Double) -> Int32? {
+        guard seekable, position.isFinite, position >= 0 else { return nil }
+        let target = duration.isFinite && duration > 0 ? min(position, max(0, duration - 1)) : position
+        return Int32(min(target * 1000, Double(Int32.max)))
+    }
+
     private func startVLCPlayback(for item: M3UItem) {
         subtitles.reset(for: item.isVOD ? item : nil)
         stopVLCPlayback()
@@ -1160,7 +1168,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 vlc.audio?.volume = Int32((self.playbackVolume * 100).rounded())
                 self.isPlaying = false
                 self.isBuffering = false
-                self.errorMessage = "This stream could not seek to the saved position. Reopen it and choose Start over."
+                self.errorMessage = "This stream could not resume at the saved position. Try again, switch player, or choose Start over."
             }
         }
     }
@@ -1863,9 +1871,20 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             self.recoveryMessage = "Reconnecting… attempt \(attempt) of 3"
         }
     }
+    var canStartOverAfterResumeFailure: Bool {
+        pendingResumePosition != nil && errorMessage != nil && currentChannel?.isVOD == true
+    }
+
+    func startCurrentStreamOver() {
+        guard canStartOverAfterResumeFailure, let channel = currentChannel else { return }
+        progressStore.clear(channel)
+        playDirectStream(channel, useVLC: useVLCPlayback,
+                         preservingDetails: isViewingMovieDetails || isViewingSeriesDetails)
+    }
+
     func retryCurrentStream() {
         guard let channel = currentChannel else { return }
-        playDirectStream(channel, useVLC: useVLCPlayback, position: channel.isVOD ? playbackPosition() : nil)
+        playDirectStream(channel, useVLC: useVLCPlayback, position: channel.isVOD ? (pendingResumePosition ?? playbackPosition()) : nil)
     }
 
     // MARK: - Favorites Management
@@ -1940,7 +1959,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                                     self.wantsPlayback = false
                                     self.isPlaying = false
                                     player.pause()
-                                    self.errorMessage = "Could not resume at the saved position. Reopen the item and choose Start over."
+                                    self.errorMessage = "Could not resume at the saved position. Try again, switch player, or choose Start over."
                                 }
                             }
                         }
@@ -2093,10 +2112,11 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
             resumeTimeoutTask = nil
             player.audio?.volume = Int32((playbackVolume * 100).rounded())
             if !wantsPlayback { player.pause() }
-        } else if player.isSeekable, player.media?.length.intValue ?? 0 > 0 {
+        } else if let target = Self.vlcResumeTime(position: position, seekable: player.isSeekable,
+                                                duration: Double(player.media?.length.intValue ?? 0) / 1000) {
             vlcResumeSeekIssued = true
-            player.time = VLCTime(int: Int32(max(0, min(position * 1000, Double(Int32.max)))))
-            currentTime = position
+            pendingResumePosition = Double(target) / 1000
+            player.time = VLCTime(int: target)
         }
     }
 

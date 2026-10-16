@@ -340,15 +340,7 @@ public struct ContentView: View {
             .padding(.top, 18)
             .padding(.bottom, 8)
 
-            Picker("Section", selection: Binding(get: { manager.showingDashboard ? nil : manager.selectedSection }, set: { section in
-                if let section { manager.browse(section) }
-            })) {
-                ForEach(M3UItem.ContentType.allCases, id: \.self) { section in
-                    Label(section.rawValue, systemImage: section.iconName).tag(Optional(section))
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            LibrarySectionTabs(manager: manager)
             .padding(.horizontal, 12)
             .padding(.top, 10)
             .padding(.bottom, 10)
@@ -875,5 +867,35 @@ public struct AddSourceSheetView: View {
         Task {
             await manager.loadPlaylist(from: cleanURL)
         }
+    }
+}
+
+struct LibrarySectionTabs: View {
+    @ObservedObject var manager: IPTVPlayerManager
+    @Environment(\.appPalette) private var palette
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(M3UItem.ContentType.allCases, id: \.self) { section in
+                let isSelected = !manager.showingDashboard && manager.selectedSection == section
+                Button { manager.browse(section) } label: {
+                    Text(section.rawValue)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 30)
+                        .foregroundStyle(isSelected ? palette.onAccent : .primary)
+                        .background(isSelected ? palette.accent : .clear, in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(section.rawValue)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Library section")
     }
 }
