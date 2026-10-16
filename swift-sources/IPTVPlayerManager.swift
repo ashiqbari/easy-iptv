@@ -550,7 +550,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     init(progressDefaults: UserDefaults, libraryLoader: LibraryLoader = LibraryLoader(), cacheURL: URL? = nil, downloads: DownloadManager? = nil) {
         sources = SavedSourceStore(defaults: progressDefaults, secure: false)
         self.downloads = downloads ?? DownloadManager(root: FileManager.default.temporaryDirectory.appendingPathComponent("EasyIPTVDownloadsTests-\(UUID())"),
-            configuration: .ephemeral, monitorNetwork: false, subtitleFetch: { $0.subtitleSources ?? [] })
+            configuration: .ephemeral, monitorNetwork: false, preferences: progressDefaults, subtitleFetch: { $0.subtitleSources ?? [] })
         progressStore = PlaybackProgressStore(defaults: progressDefaults)
         recentlyWatchedStore = RecentlyWatchedStore(defaults: progressDefaults)
         storageDefaults = progressDefaults

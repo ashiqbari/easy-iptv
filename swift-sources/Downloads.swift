@@ -160,7 +160,24 @@ final class DownloadManager: ObservableObject {
     @Published private(set) var isOnline = true
     @Published var errorMessage: String?
     @Published private(set) var deleting = Set<String>()
+    @Published var maxConcurrentDownloads: Int {
+        didSet {
+            if !(1...4).contains(maxConcurrentDownloads) {
+                maxConcurrentDownloads = min(4, max(1, maxConcurrentDownloads))
+                return
+            }
+            preferences.set(maxConcurrentDownloads, forKey: "com.easyiptv.downloads.concurrent")
+            pump()
+        }
+    }
+    @Published var saveProviderSubtitles: Bool {
+        didSet { preferences.set(saveProviderSubtitles, forKey: "com.easyiptv.downloads.subtitles") }
+    }
+    @Published var saveArtwork: Bool {
+        didSet { preferences.set(saveArtwork, forKey: "com.easyiptv.downloads.artwork") }
+    }
     let storage: DownloadStorage
+    private let preferences: UserDefaults
     private var delegate: DownloadDelegate!
     private var fileSession: URLSession!
     private let fileConfiguration: URLSessionConfiguration
@@ -181,8 +198,12 @@ final class DownloadManager: ObservableObject {
 
     init(root: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("EasyIPTV/Downloads"), configuration: URLSessionConfiguration? = nil,
-         monitorNetwork: Bool = true,
+         monitorNetwork: Bool = true, preferences: UserDefaults = .standard,
          subtitleFetch: @escaping @Sendable (M3UItem) async throws -> [SubtitleSource] = { try await XtreamCodesManager().fetchSubtitleSources(for: $0) }) {
+        self.preferences = preferences
+        maxConcurrentDownloads = min(4, max(1, preferences.object(forKey: "com.easyiptv.downloads.concurrent") as? Int ?? 2))
+        saveProviderSubtitles = preferences.object(forKey: "com.easyiptv.downloads.subtitles") as? Bool ?? true
+        saveArtwork = preferences.object(forKey: "com.easyiptv.downloads.artwork") as? Bool ?? true
         storage = DownloadStorage(root: root)
         self.subtitleFetch = subtitleFetch
         hlsIdentifier = "com.easyiptv.downloads.hls.v1"
@@ -275,7 +296,7 @@ final class DownloadManager: ObservableObject {
 
     private func pump() {
         guard ready else { return }
-        while records.filter({ $0.status == .downloading }).count < 2,
+        while records.filter({ $0.status == .downloading }).count < maxConcurrentDownloads,
               let index = records.firstIndex(where: { $0.status == .queued && !deleting.contains($0.id) && !pausing.contains($0.id) }) {
             let record = records[index]
             let task: URLSessionTask
@@ -446,9 +467,10 @@ final class DownloadManager: ObservableObject {
             persist(); pump(); return
         }
         let fetchSubtitles = subtitleFetch
+        let includeSubtitles = saveProviderSubtitles, includeArtwork = saveArtwork
         records[index].mediaComplete = true
         records[index].status = .downloading
-        records[index].message = "Saving subtitles and artwork…"
+        records[index].message = "Finishing download…"
         finishing[record.id] = Task { [weak self, storage] in
             if (try? await AVURLAsset(url: video).load(.hasProtectedContent)) == true {
                 guard let self, !Task.isCancelled else { return }
@@ -461,25 +483,27 @@ final class DownloadManager: ObservableObject {
             var subtitles: [SubtitleSource] = []
             var posterPath: String?
             var warning: String?
-            do {
-                let sources = try await fetchSubtitles(record.item)
-                var urls = Set<URL>()
-                for (number, source) in sources.filter({ urls.insert($0.url).inserted }).enumerated() {
-                    try Task.checkCancellation()
-                    do {
-                        let data = try await SubtitleFileCache.download(source.url)
-                        let path = try await storage.saveSubtitle(data, id: record.id, attempt: record.attempt, number: number)
-                        if let url = storage.url(path) { subtitles.append(SubtitleSource(url: url, label: source.label)) }
-                    } catch {
+            if includeSubtitles {
+                do {
+                    let sources = try await fetchSubtitles(record.item)
+                    var urls = Set<URL>()
+                    for (number, source) in sources.filter({ urls.insert($0.url).inserted }).enumerated() {
                         try Task.checkCancellation()
-                        warning = "Some provider subtitles couldn't be saved. Embedded tracks are still available."
+                        do {
+                            let data = try await SubtitleFileCache.download(source.url)
+                            let path = try await storage.saveSubtitle(data, id: record.id, attempt: record.attempt, number: number)
+                            if let url = storage.url(path) { subtitles.append(SubtitleSource(url: url, label: source.label)) }
+                        } catch {
+                            try Task.checkCancellation()
+                            warning = "Some provider subtitles couldn't be saved. Embedded tracks are still available."
+                        }
                     }
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    warning = "Provider subtitles couldn't be saved. Embedded tracks are still available."
                 }
-            } catch {
-                guard !Task.isCancelled else { return }
-                warning = "Provider subtitles couldn't be saved. Embedded tracks are still available."
             }
-            if let poster = record.details?.poster ?? record.item.logoURL ?? record.series?.logoURL {
+            if includeArtwork, let poster = record.details?.poster ?? record.item.logoURL ?? record.series?.logoURL {
                 // Artwork is optional and uses the same bounded fetch as subtitle sidecars.
                 if let data = try? await SubtitleFileCache.download(poster) {
                     posterPath = try? await storage.saveData(data, id: record.id, attempt: record.attempt, filename: "poster")

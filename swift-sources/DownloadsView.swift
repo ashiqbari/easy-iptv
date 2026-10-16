@@ -109,7 +109,7 @@ struct DownloadSeasonControl: View {
                 batch = []
             }
             Button("Cancel", role: .cancel) { batch = [] }
-        } message: { Text("Size depends on your provider and may be several GB. Two episodes download at a time; existing downloads are skipped.") }
+        } message: { Text("Size depends on your provider and may be several GB. Up to \(manager.downloads.maxConcurrentDownloads) simultaneous downloads; existing downloads are skipped.") }
     }
 }
 
@@ -193,6 +193,7 @@ struct DownloadsView: View {
     @ObservedObject var manager: IPTVPlayerManager
     @ObservedObject var downloads: DownloadManager
     @State private var confirmingAll = false
+    @State private var showingPreferences = false
     @FocusState private var closeFocused: Bool
 
     var body: some View {
@@ -200,6 +201,15 @@ struct DownloadsView: View {
             HStack {
                 Text("Downloads").font(.title2.bold())
                 Spacer()
+                Button { showingPreferences.toggle() } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(showingPreferences ? palette.accent : .primary)
+                .accessibilityLabel("Download preferences")
+                .help("Download preferences")
+                .accessibilityValue(showingPreferences ? "Expanded" : "Collapsed")
                 Button { manager.showingDownloads = false } label: {
                     Image(systemName: "xmark")
                 }
@@ -212,6 +222,11 @@ struct DownloadsView: View {
                 .focused($closeFocused)
             }.padding()
             Divider()
+            if showingPreferences {
+                DownloadPreferencesView(downloads: downloads)
+                    .padding()
+                Divider()
+            }
             if !downloads.isOnline {
                 Text("You're offline. Downloaded movies and episodes are ready to play.")
                     .font(.callout).foregroundStyle(.secondary).padding()
@@ -309,5 +324,38 @@ struct DownloadsView: View {
             } label: { Label("Play", systemImage: "play.fill") }
         }
         DownloadControl(item: record.item, series: record.series, downloads: downloads)
+    }
+}
+
+struct DownloadPreferencesView: View {
+    @ObservedObject var downloads: DownloadManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Stepper("Simultaneous downloads: \(downloads.maxConcurrentDownloads)",
+                    value: $downloads.maxConcurrentDownloads, in: 1...4)
+            Text("If you lower the limit, active downloads finish before more begin.")
+                .font(.caption).foregroundStyle(.secondary)
+            Toggle("Save provider subtitles", isOn: $downloads.saveProviderSubtitles)
+            Toggle("Save artwork", isOn: $downloads.saveArtwork)
+            Text("These options apply when downloads finish. Embedded subtitles and existing files are kept.")
+                .font(.caption).foregroundStyle(.secondary)
+            #if os(macOS)
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Download location").font(.subheadline.weight(.medium))
+                    Text(downloads.storage.root.path).font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled).lineLimit(2).truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
+                Button("Show in Finder") { NSWorkspace.shared.open(downloads.storage.root) }
+                    .disabled(!downloads.ready)
+            }
+            #endif
+        }
+        .toggleStyle(.switch)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Download preferences")
     }
 }

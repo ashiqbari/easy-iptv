@@ -63,7 +63,11 @@ The macOS app requires **macOS 15 or later**. To build from source, use
 Choose **Download** beside Play on a movie's details page, or on an episode card.
 **Download season** asks for confirmation before queuing the selected season.
 Open **Downloads** from Quick Access or the macOS menu (Command–Shift–D) to see
-movies and shows grouped by series and season. Two transfers run at a time.
+movies and shows grouped by series and season. Open **Preferences** in Downloads
+to choose 1–4 simultaneous downloads (default: two), save provider subtitles and
+artwork, or reveal the download folder in Finder. Preferences are remembered;
+lowering the limit lets active transfers finish before more begin. Subtitle and
+artwork choices apply when downloads finish and leave existing files intact.
 Pause, resume, cancel, retry, or delete individual items; deleting files or the
 whole library asks for confirmation and keeps viewing progress.
 

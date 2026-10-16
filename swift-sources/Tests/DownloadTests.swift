@@ -1,6 +1,10 @@
 import XCTest
 import AVFoundation
 import Network
+#if os(macOS)
+import AppKit
+import SwiftUI
+#endif
 @testable import EasyIPTV
 
 /// A loopback HTTP server exercises URLSession's real download callbacks without a provider.
@@ -79,8 +83,8 @@ final class DownloadTests: XCTestCase {
         }
         XCTFail("Download fixture timed out")
     }
-    private func store(_ root: URL, subtitles: @escaping @Sendable (M3UItem) async throws -> [SubtitleSource] = { $0.subtitleSources ?? [] }) -> DownloadManager {
-        DownloadManager(root: root, configuration: .ephemeral, monitorNetwork: false, subtitleFetch: subtitles)
+    private func store(_ root: URL, preferences: UserDefaults = UserDefaults(suiteName: "download-tests-\(UUID())")!, subtitles: @escaping @Sendable (M3UItem) async throws -> [SubtitleSource] = { $0.subtitleSources ?? [] }) -> DownloadManager {
+        DownloadManager(root: root, configuration: .ephemeral, monitorNetwork: false, preferences: preferences, subtitleFetch: subtitles)
     }
     private func item(_ server: DownloadHTTPFixture, _ name: String, episode: Int? = nil) -> M3UItem {
         M3UItem(name: name, groupTitle: episode == nil ? "Movies" : "Season 1", streamURL: server.url("/\(name).mov"),
@@ -116,6 +120,106 @@ final class DownloadTests: XCTestCase {
         XCTAssertEqual(store.records.count, 4)
         XCTAssertTrue(store.records.allSatisfy { $0.bytes == Int64(server.media.count) && $0.progress == 1 })
     }
+
+    func testPreferencesPersistAndQueueLimitChangesWithoutInterruptingActiveDownloads() async throws {
+        let suite = "download-preferences-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        let server = try DownloadHTTPFixture(); try await server.start()
+        let store = store(root, preferences: defaults)
+        defer {
+            store.invalidate(); server.stop(); defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try await wait { store.ready }
+        XCTAssertEqual(store.maxConcurrentDownloads, 2)
+        XCTAssertTrue(store.saveProviderSubtitles)
+        XCTAssertTrue(store.saveArtwork)
+        store.maxConcurrentDownloads = 1
+        let items = (1...3).map { item(server, "limit\($0)") }
+        items.forEach { store.enqueue($0) }
+        XCTAssertEqual(store.records.filter { $0.status == .downloading }.count, 1)
+        store.maxConcurrentDownloads = 2
+        try await wait { server.count("/limit1.mov") == 1 && server.count("/limit2.mov") == 1 }
+        store.maxConcurrentDownloads = 1
+        XCTAssertEqual(store.records.filter { $0.status == .downloading }.count, 2)
+        server.release("/limit1.mov")
+        try await wait { store.record(for: items[0])?.status == .downloaded }
+        XCTAssertEqual(store.record(for: items[2])?.status, .queued)
+        XCTAssertEqual(server.count("/limit3.mov"), 0)
+        server.release("/limit2.mov")
+        try await wait { server.count("/limit3.mov") == 1 }
+        server.release("/limit3.mov")
+        try await wait { store.records.allSatisfy { $0.status == .downloaded } }
+        store.maxConcurrentDownloads = 99
+        XCTAssertEqual(store.maxConcurrentDownloads, 4)
+        store.maxConcurrentDownloads = 0
+        XCTAssertEqual(store.maxConcurrentDownloads, 1)
+        store.saveProviderSubtitles = false
+        store.saveArtwork = false
+        let reopened = self.store(root.appendingPathComponent("reopened"), preferences: defaults)
+        defer { reopened.invalidate() }
+        try await wait { reopened.ready }
+        XCTAssertEqual(reopened.maxConcurrentDownloads, 1)
+        XCTAssertFalse(reopened.saveProviderSubtitles)
+        XCTAssertFalse(reopened.saveArtwork)
+        defaults.set(-10, forKey: "com.easyiptv.downloads.concurrent")
+        let invalid = self.store(root.appendingPathComponent("invalid"), preferences: defaults)
+        defer { invalid.invalidate() }
+        XCTAssertEqual(invalid.maxConcurrentDownloads, 1)
+    }
+
+    func testOptionalSubtitleAndArtworkDownloadsRespectPreferences() async throws {
+        let suite = "download-extras-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(suite)
+        let server = try DownloadHTTPFixture(); try await server.start()
+        let store = store(root, preferences: defaults, subtitles: { _ in
+            [SubtitleSource(url: server.url("/subtitle.srt"), label: "English")]
+        })
+        defer {
+            store.invalidate(); server.stop(); defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        try await wait { store.ready }
+        server.release("/poster")
+        for includeExtras in [false, true] {
+            store.saveProviderSubtitles = includeExtras; store.saveArtwork = includeExtras
+            let movie = M3UItem(name: "Extras \(includeExtras)", logoURL: server.url("/poster"),
+                streamURL: server.url("/extras-\(includeExtras).mov"), contentType: .movie)
+            store.enqueue(movie)
+            server.release("/extras-\(includeExtras).mov")
+            try await wait { store.record(for: movie)?.status == .downloaded }
+            let record = try XCTUnwrap(store.record(for: movie))
+            XCTAssertNotNil(store.localURL(for: movie))
+            XCTAssertEqual(record.subtitles.count, includeExtras ? 1 : 0)
+            XCTAssertEqual(record.posterPath != nil, includeExtras)
+            XCTAssertEqual(server.count("/subtitle.srt"), includeExtras ? 1 : 0)
+            XCTAssertEqual(server.count("/poster"), includeExtras ? 1 : 0)
+        }
+        store.saveProviderSubtitles = false; store.saveArtwork = false
+        let downloaded = try XCTUnwrap(store.records.last)
+        XCTAssertEqual(downloaded.subtitles.count, 1, "Preferences must not delete saved extras")
+        XCTAssertNotNil(downloaded.posterPath)
+    }
+
+    #if os(macOS)
+    func testPreferencesFitNarrowAndWideDownloads() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("download-layout-\(UUID())")
+        let store = store(root)
+        defer { store.invalidate(); try? FileManager.default.removeItem(at: root) }
+        try await wait { store.ready }
+        for width in [296.0, 760.0] {
+            let controller = NSHostingController(rootView: DownloadPreferencesView(downloads: store)
+                .padding().frame(width: width)
+                .background(AppPalette(appearance: .forest).background)
+                .environment(\.appPalette, AppPalette(appearance: .forest)).environment(\.colorScheme, .dark))
+            let size = controller.sizeThatFits(in: CGSize(width: width, height: 1000))
+            XCTAssertEqual(size.width, width, accuracy: 1)
+            XCTAssertLessThan(size.height, 350)
+            XCTAssertGreaterThan(size.height, 100)
+        }
+    }
+    #endif
 
     func testFailureRetryCancelAndStaleCallbacksDoNotResurrectDeletedFiles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("downloads-\(UUID())")
