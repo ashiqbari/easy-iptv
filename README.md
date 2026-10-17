@@ -29,7 +29,7 @@ Bring your Xtream Codes account or M3U playlist, and make yourself at home.
 | 💬 **Subtitles** | Choose embedded or provider tracks, import SRT/WebVTT files, and adjust text size while watching. |
 | ⏯ **Pick up where you left off** | Saved movie and episode progress, Resume or Start over, and watched indicators. |
 | ▣ **Picture in Picture** | Automatically float playback when another in-app screen covers the player, stay in PiP while browsing, and return manually without restarting. Works with AVKit and VLC on macOS. |
-| 🖥 **Native playback** | AVKit playback, an in-app VLC fallback on macOS, volume controls, and native macOS fullscreen. |
+| 🖥 **Native playback** | VLC by default for Live TV, movies, and episodes on macOS, with manual AVKit selection, volume controls, and native macOS fullscreen. iOS uses AVKit. |
 | ◐ **Appearance** | Choose System, Light, or Dark from the sidebar's Appearance menu (or the macOS menu bar). Your choice is remembered and changes without restarting playback. |
 | ⬇ **Offline viewing** | Download movies, individual episodes, or a season. Manage the queue from Downloads and play saved media with the same subtitles and resume progress. |
 

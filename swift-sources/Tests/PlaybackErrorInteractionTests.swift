@@ -18,8 +18,8 @@ final class PlaybackErrorInteractionTests: XCTestCase {
                 let manager = IPTVPlayerManager(progressDefaults: defaults)
                 manager.progressStore.save(item: item, position: 120, duration: 0)
                 manager.continueWatching(item)
+                if !useVLC { manager.playAVKitFixture(item) }
                 manager.player?.replaceCurrentItem(with: nil)
-                if useVLC { manager.playCurrentStreamWithVLC() }
                 manager.isPlaying = false; manager.isBuffering = false
                 manager.errorMessage = "This stream could not resume at the saved position. Try again, switch player, or choose Start over."
                 let originalAV = manager.player, originalVLC = manager.vlcPlayer

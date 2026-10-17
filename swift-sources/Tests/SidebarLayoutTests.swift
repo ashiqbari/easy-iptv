@@ -199,7 +199,7 @@ final class SidebarLayoutTests: XCTestCase {
         for type in [M3UItem.ContentType.movie, .series] {
             let manager = manager()
             let item = M3UItem(name: "Controls fixture", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-sidebar-fixture.mp4"), contentType: type)
-            manager.playDirectStream(item)
+            manager.playAVKitFixture(item)
             if type == .series { manager.seriesEpisodes = [item] }
             manager.player?.replaceCurrentItem(with: nil)
             defer { manager.stop() }
@@ -223,6 +223,7 @@ final class SidebarLayoutTests: XCTestCase {
     private func checkMountedVideoSurface(useVLC: Bool) async throws {
         let manager = manager()
         manager.playDirectStream(M3UItem(name: "Surface fixture", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-sidebar-fixture.mp4"), contentType: useVLC ? .live : .movie))
+        if !useVLC, let item = manager.currentChannel { manager.playAVKitFixture(item) }
         manager.player?.replaceCurrentItem(with: nil)
         let hosting = NSHostingView(rootView: ContentView(manager: manager))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
@@ -318,7 +319,7 @@ final class SidebarLayoutTests: XCTestCase {
 
     func testSidebarTogglesDoNotReplaceOrStopPlayback() throws {
         let manager = manager()
-        manager.playDirectStream(M3UItem(name: "Fixture", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-sidebar-fixture.mp4"), contentType: .movie))
+        manager.playAVKitFixture(M3UItem(name: "Fixture", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-sidebar-fixture.mp4"), contentType: .movie))
         let player = try XCTUnwrap(manager.player)
         let item = player.currentItem
         for _ in 0..<4 {

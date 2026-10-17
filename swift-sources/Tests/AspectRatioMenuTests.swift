@@ -11,7 +11,7 @@ final class AspectRatioMenuTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         let url = try await silentMedia()
         let manager = IPTVPlayerManager(progressDefaults: defaults)
-        manager.playDirectStream(M3UItem(name: "Aspect menu fixture", streamURL: url, contentType: .movie))
+        manager.playAVKitFixture(M3UItem(name: "Aspect menu fixture", streamURL: url, contentType: .movie))
         let hosting = NSHostingView(rootView: IPTVPlaybackView(manager: manager))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1000, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)

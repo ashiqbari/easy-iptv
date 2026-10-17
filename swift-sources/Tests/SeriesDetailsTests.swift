@@ -62,7 +62,7 @@ final class SeriesDetailsTests: XCTestCase {
         defer { manager.stop() }
         manager.fetchAndShowSeries(firstShow)
         try await waitUntil { !manager.isLoadingEpisodes }
-        manager.playDirectStream(firstEpisode)
+        manager.playAVKitFixture(firstEpisode)
         let player = try XCTUnwrap(manager.player)
         let item = try XCTUnwrap(player.currentItem)
         XCTAssertTrue(manager.isCurrentPlayback(firstShow))

@@ -1091,7 +1091,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     /// Plays an individual stream, movie, or resolved TV episode directly.
     public func playDirectStream(_ item: M3UItem) {
         #if os(macOS)
-        requestPlayback(item, useVLC: item.contentType == .live)
+        requestPlayback(item, useVLC: true)
         #else
         requestPlayback(item, useVLC: false)
         #endif
@@ -1125,7 +1125,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     func continueWatching(_ item: M3UItem) {
         showingDashboard = false
         let position = progressStore.progress(for: item)?.resumePosition
+        #if os(macOS)
+        playDirectStream(item, useVLC: true, position: position)
+        #else
         playDirectStream(item, useVLC: false, position: position)
+        #endif
     }
 
     #if os(macOS)

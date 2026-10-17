@@ -29,6 +29,7 @@ final class SearchTests: XCTestCase {
         let manager = IPTVPlayerManager(progressDefaults: defaults)
         defer { manager.stop() }
         manager.playDirectStream(M3UItem(name: "Fixture", streamURL: URL(fileURLWithPath: "/private/tmp/downloads-shortcut.mp4"), contentType: useVLC ? .live : .movie))
+        if !useVLC, let item = manager.currentChannel { manager.playAVKitFixture(item) }
         manager.player?.replaceCurrentItem(with: nil)
         manager.selectedCategory = "Favorites"
         manager.searchText = "Fixture"
@@ -122,7 +123,7 @@ final class SearchTests: XCTestCase {
         defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
         manager.selectedSection = .movie
         await manager.loadPlaylist(from: "https://fixture.invalid/category-search.m3u")
-        manager.playDirectStream(items[0]); manager.player?.replaceCurrentItem(with: nil)
+        manager.playAVKitFixture(items[0]); manager.player?.replaceCurrentItem(with: nil)
         manager.selectedCategory = "Café Sports"
         manager.searchText = "Match"
         let player = try XCTUnwrap(manager.player)
@@ -200,7 +201,7 @@ final class SearchTests: XCTestCase {
         defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
         manager.selectedSection = .movie
         await manager.loadPlaylist(from: "https://fixture.invalid/categories.m3u")
-        manager.playDirectStream(items[0])
+        manager.playAVKitFixture(items[0])
         manager.player?.replaceCurrentItem(with: nil)
         let player = try XCTUnwrap(manager.player)
         manager.toggleFavorite(items[0])
@@ -268,7 +269,7 @@ final class SearchTests: XCTestCase {
         defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
         manager.selectedSection = .movie
         await manager.loadPlaylist(from: "https://fixture.invalid/list.m3u")
-        manager.playDirectStream(items[0])
+        manager.playAVKitFixture(items[0])
         manager.player?.replaceCurrentItem(with: nil)
         manager.selectedCategory = "Even"
         let playing = try XCTUnwrap(manager.currentChannel?.id)

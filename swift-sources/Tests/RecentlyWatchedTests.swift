@@ -142,7 +142,12 @@ final class RecentlyWatchedTests: XCTestCase {
         XCTAssertEqual(manager.currentChannel?.id, last.id)
         XCTAssertFalse(manager.isViewingSeriesDetails)
         XCTAssertNil(manager.resumeRequest, "History resumes directly without an extra prompt")
+        #if os(macOS)
+        XCTAssertTrue(manager.useVLCPlayback)
+        XCTAssertNotNil(manager.vlcPlayer)
+        #else
         XCTAssertNotNil(manager.player)
+        #endif
         manager.stop()
         manager.recentlyWatchedStore.record(media(9, type: .series, episode: 9), series: show)
         manager.playRecentlyWatched(show, resumeSeries: true)
@@ -170,6 +175,7 @@ final class RecentlyWatchedTests: XCTestCase {
         manager.recordPlaybackStarted()
         XCTAssertTrue(manager.recentlyWatchedStore.records.isEmpty)
         manager.playMovie()
+        manager.playAVKitFixture(item)
         for _ in 0..<250 {
             if !manager.recentlyWatchedStore.records.isEmpty { break }
             try await Task.sleep(nanoseconds: 20_000_000)

@@ -51,12 +51,48 @@ final class PlaybackProgressTests: XCTestCase {
     }
 
     #if os(macOS)
+    @MainActor func testVLCIsDefaultForEveryContentTypeAndContinueWatching() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let defaults = isolatedDefaults()
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer { manager.stop() }
+        for type in M3UItem.ContentType.allCases {
+            let item = media(url: url, type: type)
+            manager.playDirectStream(item)
+            XCTAssertTrue(manager.useVLCPlayback, "Default for \(type)")
+            XCTAssertNotNil(manager.vlcPlayer)
+            XCTAssertNil(manager.player)
+            let originalVLC = manager.vlcPlayer
+            manager.playDirectStreamWithAVKit(item)
+            XCTAssertFalse(manager.useVLCPlayback)
+            XCTAssertNotNil(manager.player, "Manual AVKit selection must still work")
+            XCTAssertNil(manager.vlcPlayer)
+            manager.stop()
+            if type != .live {
+                manager.progressStore.save(item: item, position: 120, duration: 300)
+                manager.playDirectStream(item)
+                let request = try XCTUnwrap(manager.resumeRequest)
+                XCTAssertTrue(request.useVLC)
+                manager.resolveResume(request, startOver: false)
+                XCTAssertTrue(manager.useVLCPlayback)
+                manager.continueWatching(item)
+                XCTAssertTrue(manager.useVLCPlayback)
+                XCTAssertEqual(manager.progressStore.progress(for: item)?.resumePosition, 120)
+                XCTAssertNil(manager.player)
+                XCTAssertTrue(manager.vlcPlayer !== originalVLC)
+            }
+            manager.stop()
+            manager.progressStore.clear(item)
+        }
+    }
+
     @MainActor func testLiveRelativeSeekReadsEngineClockWithoutPublishedTicks() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
         defer { manager.stop() }
-        manager.playDirectStreamWithAVKit(media(url: url, type: .live))
+        manager.playAVKitFixture(media(url: url, type: .live))
         let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
         XCTAssertTrue(ready)
         let player = try XCTUnwrap(manager.player)
@@ -168,7 +204,7 @@ final class PlaybackProgressTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
         let item = media(url: url)
-        manager.playDirectStream(item)
+        manager.playAVKitFixture(item)
         let originalItem = manager.player?.currentItem
         let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
         XCTAssertTrue(ready, "AVPlayer error: \(String(describing: originalItem?.error))")
@@ -197,6 +233,7 @@ final class PlaybackProgressTests: XCTestCase {
         manager.playChannel(item)
         XCTAssertNil(manager.player)
         manager.playMovie()
+        manager.playAVKitFixture(item)
         let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
         XCTAssertTrue(ready)
         let player = try XCTUnwrap(manager.player)
@@ -213,7 +250,7 @@ final class PlaybackProgressTests: XCTestCase {
         manager.playMovie()
         XCTAssertTrue(manager.player === player)
         XCTAssertFalse(manager.isViewingMovieDetails)
-        let resumed = await waitUntil { (manager.player?.currentTime().seconds ?? 0) >= 119 }
+        let resumed = await waitUntil { (manager.vlcPlayer.map { Double($0.time.intValue) / 1000 } ?? manager.player?.currentTime().seconds ?? 0) >= 119 }
         XCTAssertTrue(resumed)
         XCTAssertNil(manager.resumeRequest)
     }
@@ -229,7 +266,10 @@ final class PlaybackProgressTests: XCTestCase {
         // SwiftUI dismisses the alert binding before running the selected action.
         manager.showingResumeChoice = false
         manager.resolveResume(request, startOver: false)
-        let resumed = await waitUntil { (manager.player?.currentTime().seconds ?? 0) >= 119 }
+        manager.vlcPlayer?.media?.addOption(":vout=dummy")
+        manager.vlcPlayer?.media?.addOption(":aout=dummy")
+        manager.vlcPlayer?.play()
+        let resumed = await waitUntil { (manager.vlcPlayer.map { Double($0.time.intValue) / 1000 } ?? manager.player?.currentTime().seconds ?? 0) >= 119 }
         XCTAssertTrue(resumed)
         manager.stop()
         manager.playDirectStream(item)
@@ -245,7 +285,7 @@ final class PlaybackProgressTests: XCTestCase {
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
         let first = UUID(), replacement = UUID()
         manager.playerViewAppeared(first)
-        manager.playDirectStream(media(url: url))
+        manager.playAVKitFixture(media(url: url))
         let player = try XCTUnwrap(manager.player)
         manager.playerViewDisappeared(first)
         manager.playerViewAppeared(replacement)
@@ -262,7 +302,7 @@ final class PlaybackProgressTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
         let first = media(url: url), second = media(url: url, episode: 2)
-        manager.playDirectStream(first)
+        manager.playAVKitFixture(first)
         let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
         XCTAssertTrue(ready)
         let oldPlayer = try XCTUnwrap(manager.player)
@@ -273,7 +313,7 @@ final class PlaybackProgressTests: XCTestCase {
         manager.pauseForBackground()
         XCTAssertEqual(oldPlayer.rate, 0)
         XCTAssertEqual(manager.progressStore.progress(for: first)?.position ?? 0, 80, accuracy: 1)
-        manager.playDirectStream(second)
+        manager.playAVKitFixture(second)
         XCTAssertNil(oldPlayer.currentItem)
         XCTAssertEqual(manager.currentChannel?.episodeNumber, 2)
         manager.stop()
@@ -284,7 +324,7 @@ final class PlaybackProgressTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
         let item = media(url: url)
-        manager.playDirectStream(item)
+        manager.playAVKitFixture(item)
         let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
         XCTAssertTrue(ready)
         let player = try XCTUnwrap(manager.player)
@@ -299,7 +339,7 @@ final class PlaybackProgressTests: XCTestCase {
         XCTAssertTrue(finished)
         manager.stop()
         XCTAssertTrue(manager.progressStore.progress(for: item)?.completed == true)
-        manager.playDirectStream(item)
+        manager.playAVKitFixture(item)
         XCTAssertNil(manager.resumeRequest)
         XCTAssertLessThan(manager.player?.currentTime().seconds ?? 0, 5)
         manager.stop()
@@ -348,7 +388,7 @@ final class PlaybackProgressTests: XCTestCase {
         XCTAssertNil(manager.progressStore.progress(for: item))
         XCTAssertNil(manager.errorMessage)
         XCTAssertEqual(manager.currentChannel?.id, item.id)
-        XCTAssertNotNil(manager.player)
+        XCTAssertNotNil(manager.vlcPlayer)
     }
 
     @MainActor func testVLCStopReleasesActivePlayerAndCannotRestart() async throws {

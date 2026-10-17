@@ -1,5 +1,18 @@
 import XCTest
 import AVFoundation
+@testable import EasyIPTV
+
+@MainActor
+extension IPTVPlayerManager {
+    func playAVKitFixture(_ item: M3UItem) {
+        showingDashboard = false
+        #if os(macOS)
+        playDirectStreamWithAVKit(item)
+        #else
+        playDirectStream(item)
+        #endif
+    }
+}
 
 /// A native-written silent movie exercises real metadata/clock without a provider account.
 func silentMedia() async throws -> URL {

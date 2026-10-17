@@ -171,7 +171,7 @@ final class LifecycleTests: XCTestCase {
     @MainActor func testManagerDeinitClearsAVPlayerEvenWhenExternallyRetained() async throws {
         var manager: IPTVPlayerManager? = IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: UUID().uuidString)!)
         let reference = WeakReference(manager)
-        manager?.playDirectStream(M3UItem(name: "Local", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-lifecycle-fixture.mp4"), contentType: .movie))
+        manager?.playAVKitFixture(M3UItem(name: "Local", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-lifecycle-fixture.mp4"), contentType: .movie))
         let player = try XCTUnwrap(manager?.player)
         manager = nil
         try await waitUntil { reference.value == nil }
@@ -201,7 +201,7 @@ final class LifecycleTests: XCTestCase {
         let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
         await manager.loadPlaylist(from: "https://fixture.invalid/library.m3u")
         if useVLC { manager.playDirectStream(live) }
-        else { manager.playDirectStreamWithAVKit(live) }
+        else { manager.playAVKitFixture(live) }
         let player = manager.player
         let avItem = player?.currentItem
         let vlc = manager.vlcPlayer
@@ -265,9 +265,9 @@ final class LifecycleTests: XCTestCase {
         manager.playMovie()
         XCTAssertEqual(manager.currentChannel?.id, movie.id)
         XCTAssertFalse(manager.isViewingMovieDetails)
-        XCTAssertFalse(manager.player === player)
+        if let player { XCTAssertFalse(manager.player === player) }
         if let player { XCTAssertNil(player.currentItem) }
-        XCTAssertNil(manager.vlcPlayer)
+        XCTAssertNotNil(manager.vlcPlayer)
         manager.stop()
         XCTAssertNil(manager.currentChannel)
         XCTAssertNil(manager.player)
@@ -306,7 +306,7 @@ final class LifecycleTests: XCTestCase {
         weak var playerReference: VLCMediaPlayer?
         weak var viewReference: NSView?
         autoreleasepool {
-            manager?.playDirectStream(M3UItem(name: "Local", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-lifecycle-fixture.mp4"), contentType: .movie))
+            manager?.playAVKitFixture(M3UItem(name: "Local", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-lifecycle-fixture.mp4"), contentType: .movie))
             manager?.playCurrentStreamWithVLC()
             let player = manager!.vlcPlayer!
             let view = NSView()

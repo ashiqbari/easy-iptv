@@ -43,7 +43,7 @@ final class MediaRemoteControlTests: XCTestCase {
             XCTAssertEqual(manager.handleRemotePlayback(.play), .noSuchContent)
             XCTAssertFalse(MPRemoteCommandCenter.shared().playCommand.isEnabled)
             let item = M3UItem(name: "Remote fixture", streamURL: url, contentType: .movie)
-            manager.playDirectStream(item)
+            manager.playAVKitFixture(item)
             #if os(macOS)
             if useVLC {
                 manager.playCurrentStreamWithVLC()
@@ -98,7 +98,7 @@ final class MediaRemoteControlTests: XCTestCase {
         manager!.configureRemotePlaybackControls()
         let episode = M3UItem(name: "Long show title", groupTitle: "Season 2", streamURL: url,
             contentType: .series, seasonNumber: 2, episodeNumber: 3)
-        manager!.playDirectStream(episode)
+        manager!.playAVKitFixture(episode)
         try await wait { manager?.isPlaying == true }
         manager!.updatePlaybackClock(position: 120, duration: 300)
         manager!.handleRemotePlayback(.pause)

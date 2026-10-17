@@ -520,7 +520,7 @@ final class GuideSearchModelTests: XCTestCase {
         let manager = IPTVPlayerManager(progressDefaults: defaults)
         defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites() }
         let playing = M3UItem(name: "Movie", streamURL: root.appendingPathComponent("no-network.mp4"), contentType: .movie)
-        manager.playDirectStream(playing); manager.player?.replaceCurrentItem(with: nil)
+        manager.playAVKitFixture(playing); manager.player?.replaceCurrentItem(with: nil)
         let player = try XCTUnwrap(manager.player)
         let channel = M3UItem(name: "Sports", streamURL: URL(string: "https://provider.example/live/alice/secret/1.ts")!, tvgID: "one", contentType: .live)
         model.setChannels([channel])

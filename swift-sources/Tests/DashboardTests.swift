@@ -125,6 +125,7 @@ final class DashboardTests: XCTestCase {
         XCTAssertEqual(manager.selectedSection, .series)
         XCTAssertEqual(manager.selectedCategory, "Drama")
         XCTAssertEqual(manager.libraryNavigationTargetID, show.id)
+        manager.playAVKitFixture(episode)
         let player = try XCTUnwrap(manager.player)
         let playerItem = try XCTUnwrap(player.currentItem)
         #if os(macOS)
@@ -291,6 +292,7 @@ final class DashboardTests: XCTestCase {
         for useVLC in [false, true] {
             let fixture = M3UItem(name: "Player fixture", streamURL: URL(fileURLWithPath: "/private/tmp/dashboard-fixture.mp4"), contentType: useVLC ? .live : .movie)
             manager.playDirectStream(fixture)
+            if !useVLC, let item = manager.currentChannel { manager.playAVKitFixture(item) }
             manager.player?.replaceCurrentItem(with: nil)
             let hosting = NSHostingView(rootView: ContentView(manager: manager))
             let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820), styleMask: [.titled, .resizable], backing: .buffered, defer: false)

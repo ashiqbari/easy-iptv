@@ -291,7 +291,7 @@ final class PictureInPictureTests: XCTestCase {
         let manager = IPTVPlayerManager(progressDefaults: defaults)
         defer { manager.stop(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url) }
         let episode = M3UItem(name: "Episode", streamURL: url, contentType: .series, seasonNumber: 1, episodeNumber: 2)
-        manager.playDirectStream(episode)
+        manager.playAVKitFixture(episode)
         let player = try XCTUnwrap(manager.player)
         let item = try XCTUnwrap(player.currentItem)
         manager.returnToSeries()
@@ -313,7 +313,7 @@ final class PictureInPictureTests: XCTestCase {
         let url = try await silentMedia()
         let manager = IPTVPlayerManager(progressDefaults: defaults)
         defer { manager.stop(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url) }
-        manager.playDirectStream(M3UItem(name: "Movie", streamURL: url, contentType: .movie))
+        manager.playAVKitFixture(M3UItem(name: "Movie", streamURL: url, contentType: .movie))
         let player = try XCTUnwrap(manager.player)
         let item = try XCTUnwrap(player.currentItem)
         let layer = AVPlayerLayer(player: player)
@@ -361,7 +361,9 @@ final class PictureInPictureTests: XCTestCase {
         url = try await silentMedia()
         defaults = UserDefaults(suiteName: suite)!
         manager = IPTVPlayerManager(progressDefaults: defaults)
-        manager.playDirectStream(M3UItem(name: "Playback fixture", streamURL: url, contentType: contentType))
+        let item = M3UItem(name: "Playback fixture", streamURL: url, contentType: contentType)
+        if contentType == .live { manager.playDirectStream(item) }
+        else { manager.playAVKitFixture(item) }
         hosting = NSHostingView(rootView: ContentView(manager: manager))
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

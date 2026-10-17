@@ -192,7 +192,7 @@ final class LibrarySortingTests: XCTestCase {
         await manager.loadPlaylist(from: "https://fixture.invalid/list")
         let media = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: media) }
-        manager.playDirectStream(M3UItem(name: "Playback", streamURL: media, contentType: .movie))
+        manager.playAVKitFixture(M3UItem(name: "Playback", streamURL: media, contentType: .movie))
         let player = try XCTUnwrap(manager.player)
         #if os(macOS)
         var beforeSort = rusage()

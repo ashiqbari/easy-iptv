@@ -81,6 +81,7 @@ final class VideoScreenSizeTests: XCTestCase {
         let manager = IPTVPlayerManager(progressDefaults: defaults)
         let item = M3UItem(name: "Sizing fixture", streamURL: url, contentType: useVLC ? .live : .movie)
         manager.playDirectStream(item)
+        if !useVLC, let item = manager.currentChannel { manager.playAVKitFixture(item) }
         let av = manager.player
         let avItem = av?.currentItem
         let vlc = manager.vlcPlayer

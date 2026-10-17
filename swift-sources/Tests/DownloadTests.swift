@@ -282,6 +282,7 @@ final class DownloadTests: XCTestCase {
         let request = try XCTUnwrap(manager.resumeRequest)
         XCTAssertEqual(request.position, 120)
         manager.resolveResume(request, startOver: false)
+        manager.playAVKitFixture(first)
         try await wait { (manager.player?.currentTime().seconds ?? 0) >= 119 }
         XCTAssertEqual(manager.currentChannel?.streamURL, first.streamURL)
         XCTAssertEqual((manager.player?.currentItem?.asset as? AVURLAsset)?.url, store.localURL(for: first))

@@ -17,7 +17,7 @@ final class PlaybackControlsTests: XCTestCase {
             let suite = "double-click-\(UUID())", defaults = UserDefaults(suiteName: suite)!
             let manager = IPTVPlayerManager(progressDefaults: defaults)
             manager.playDirectStream(M3UItem(name: "Fixture", streamURL: url, contentType: .movie))
-            if useVLC { manager.playCurrentStreamWithVLC() }
+            if !useVLC, let item = manager.currentChannel { manager.playAVKitFixture(item) }
             let hosting = NSHostingView(rootView: IPTVPlaybackView(manager: manager))
             let window = FullscreenRequestWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 650), styleMask: [.titled], backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false

@@ -91,6 +91,7 @@ final class AppearanceTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let manager = IPTVPlayerManager(progressDefaults: defaults)
         manager.playDirectStream(M3UItem(name: "Theme fixture", streamURL: URL(fileURLWithPath: "/private/tmp/appearance-fixture.mp4"), contentType: useVLC ? .live : .movie))
+        if !useVLC, let item = manager.currentChannel { manager.playAVKitFixture(item) }
         manager.player?.replaceCurrentItem(with: nil)
         let player = manager.player
         let vlcPlayer = manager.vlcPlayer
