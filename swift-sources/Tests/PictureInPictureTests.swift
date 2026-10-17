@@ -23,13 +23,10 @@ final class PictureInPictureTests: XCTestCase {
         let manager = IPTVPlayerManager(progressDefaults: defaults)
         manager.showingDashboard = false
         XCTAssertTrue(manager.isPlayerDestinationVisible)
-        for screen in [\IPTVPlayerManager.showingAboutSheet, \.showingSubscriptionInfo,
-                       \.isViewingSeriesDetails] {
-            manager[keyPath: screen] = true
-            XCTAssertFalse(manager.isPlayerDestinationVisible)
-            manager[keyPath: screen] = false
-            XCTAssertTrue(manager.isPlayerDestinationVisible)
-        }
+        manager.isViewingSeriesDetails = true
+        XCTAssertFalse(manager.isPlayerDestinationVisible)
+        manager.isViewingSeriesDetails = false
+        XCTAssertTrue(manager.isPlayerDestinationVisible)
         manager.showingDashboard = true
         XCTAssertFalse(manager.isPlayerDestinationVisible)
         manager.isFullscreen = true
@@ -48,7 +45,7 @@ final class PictureInPictureTests: XCTestCase {
             let vlcPlayer = manager.vlcPlayer
             let pip = manager.pictureInPicture
             for screen in [\IPTVPlayerManager.showingSources, \.showingPlaylistSheet, \.showingOrganization, \.showingGuideSearch,
-                           \.showingDownloads, \.showingEPGSheet] {
+                           \.showingDownloads, \.showingEPGSheet, \.showingAboutSheet, \.showingSubscriptionInfo] {
                 manager[keyPath: screen] = true
                 for _ in 0..<5 { try await Task.sleep(nanoseconds: 10_000_000) }
                 pip.reconcile()
@@ -59,15 +56,28 @@ final class PictureInPictureTests: XCTestCase {
                 XCTAssertTrue(manager.vlcPlayer === vlcPlayer)
                 manager[keyPath: screen] = false
             }
+            manager.catchupChannel = manager.currentChannel
+            for _ in 0..<5 { try await Task.sleep(nanoseconds: 10_000_000) }
+            pip.reconcile()
+            XCTAssertTrue(manager.isPlayerDestinationVisible)
+            XCTAssertFalse(pip.isActive, "Catch-up must not start PiP")
+            XCTAssertTrue(manager.isPlaying)
+            XCTAssertTrue(manager.player === player)
+            XCTAssertTrue(manager.vlcPlayer === vlcPlayer)
+            manager.catchupChannel = nil
             pip.toggle()
             XCTAssertTrue(pip.isActive, "Manual PiP must still work")
             for screen in [\IPTVPlayerManager.showingSources, \.showingPlaylistSheet, \.showingOrganization, \.showingGuideSearch,
-                           \.showingDownloads, \.showingEPGSheet] {
+                           \.showingDownloads, \.showingEPGSheet, \.showingAboutSheet, \.showingSubscriptionInfo] {
                 manager[keyPath: screen] = true
                 pip.reconcile()
                 XCTAssertTrue(pip.isActive, "Utility screens must preserve existing PiP")
                 manager[keyPath: screen] = false
             }
+            manager.catchupChannel = manager.currentChannel
+            pip.reconcile()
+            XCTAssertTrue(pip.isActive, "Catch-up must preserve existing PiP")
+            manager.catchupChannel = nil
         }
     }
 
@@ -189,13 +199,13 @@ final class PictureInPictureTests: XCTestCase {
             XCTAssertFalse(pip.isActive, "External focus/window changes must not trigger PiP")
         }
         XCTAssertTrue(fixture.manager.isPlaying)
-        fixture.manager.showingAboutSheet = true
+        fixture.manager.showingDashboard = true
         pip.reconcile()
         XCTAssertTrue(pip.isActive)
-        fixture.manager.showingAboutSheet = false
+        fixture.manager.showingDashboard = false
         pip.reconcile()
         XCTAssertTrue(pip.isActive, "Closing a covering screen must not leave PiP")
-        fixture.manager.showingAboutSheet = true
+        fixture.manager.showingDashboard = true
         pip.reconcile()
         XCTAssertTrue(pip.isActive)
         fixture.manager.autoPictureInPicture = false
