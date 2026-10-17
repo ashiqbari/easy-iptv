@@ -117,14 +117,14 @@ final class GuideSearchModel: ObservableObject {
 struct GuideSearchView: View {
     @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
-    @StateObject private var model: GuideSearchModel
+    @ObservedObject private var model: GuideSearchModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
 
     init(manager: IPTVPlayerManager) {
         self.manager = manager
-        _model = StateObject(wrappedValue: GuideSearchModel(index: manager.guideIndex) { manager.guideRevision = $0 })
+        model = manager.guideSearchModel
     }
 
     var body: some View {
@@ -205,7 +205,7 @@ struct GuideSearchView: View {
             .background(palette.background)
             .navigationTitle("Search TV Guide")
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.keyboardShortcut(.cancelAction) }
+                ToolbarItem(placement: .confirmationAction) { Button("Close") { dismiss() }.keyboardShortcut(.cancelAction) }
                 ToolbarItem(placement: .automatic) {
                     Button { model.refresh(force: true) } label: { Label("Refresh guides", systemImage: "arrow.clockwise") }
                         .disabled(model.indexing)
@@ -215,10 +215,7 @@ struct GuideSearchView: View {
         #if os(macOS)
         .frame(minWidth: 480, idealWidth: 620, minHeight: 500, idealHeight: 650)
         #endif
-        .onReceive(manager.$channels) { model.setChannels($0) }
-        .onReceive(manager.$guideRevision.dropFirst()) { revision in
-            if revision != model.refreshID { model.refresh() }
-        }
+        .onAppear { if Date() >= model.nextRefresh { model.tick() } }
         .onReceive(timer) { _ in if scenePhase == .active { model.tick() } }
         .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in if scenePhase == .active { model.refresh() } }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in if scenePhase == .active { model.tick() } }
@@ -227,10 +224,9 @@ struct GuideSearchView: View {
         #else
         .onChange(of: scenePhase) { phase in handlePhase(phase) }
         #endif
-        .onDisappear { model.cancel() }
     }
 
     private func handlePhase(_ phase: ScenePhase) {
-        if phase == .active { model.refresh() } else { model.cancel() }
+        if phase == .active { model.tick() }
     }
 }

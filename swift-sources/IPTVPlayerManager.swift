@@ -158,6 +158,15 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     let progressStore: PlaybackProgressStore
     let recentlyWatchedStore: RecentlyWatchedStore
     let guideIndex = GuideSearchIndex()
+    lazy var guideSearchModel: GuideSearchModel = {
+        let model = GuideSearchModel(index: guideIndex) { [weak self] in self?.guideRevision = $0 }
+        $channels.sink { [weak model] in model?.setChannels($0) }.store(in: &cancellables)
+        $guideRevision.dropFirst().sink { [weak model] revision in
+            guard let model, revision != model.refreshID else { return }
+            model.refresh()
+        }.store(in: &cancellables)
+        return model
+    }()
     @Published var guideRevision = UUID()
     private var libraryItemsByKey: [String: M3UItem] = [:]
     private var visibleChannelIDs: Set<UUID> = []

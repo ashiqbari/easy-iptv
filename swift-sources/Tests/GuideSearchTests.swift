@@ -1,5 +1,9 @@
 import XCTest
 import SQLite3
+#if os(macOS)
+import AppKit
+import SwiftUI
+#endif
 @testable import EasyIPTV
 
 private actor GuideDownloads {
@@ -367,6 +371,63 @@ final class GuideSearchTests: XCTestCase {
 
 @MainActor
 final class GuideSearchModelTests: XCTestCase {
+    #if os(macOS)
+    func testClosingSearchViewKeepsRefreshAndSearchRunningForReopening() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("guide-background-\(UUID())")
+        let suite = "guide-background-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        let downloads = GuideDownloads()
+        let formatter = DateFormatter(); formatter.dateFormat = "yyyyMMddHHmmss Z"
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        await downloads.configure("""
+        <tv><programme channel="one" start="\(formatter.string(from: Date().addingTimeInterval(-60)))" stop="\(formatter.string(from: Date().addingTimeInterval(600)))"><title>Background news</title></programme></tv>
+        """, delay: 500_000_000)
+        let index = GuideSearchIndex(url: root.appendingPathComponent("guide.sqlite"), download: { try await downloads.download($0) })
+        let model = GuideSearchModel(index: index)
+        manager.guideSearchModel = model
+        let channel = M3UItem(name: "News", streamURL: URL(string: "https://provider.example/live/user/pass/1.ts")!, tvgID: "one", contentType: .live)
+        model.setChannels([channel])
+        model.query = "background"
+        let host = NSHostingView(rootView: AnyView(GuideSearchView(manager: manager)))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 650), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        host.layoutSubtreeIfNeeded()
+        defer {
+            model.cancel()
+            window.close()
+            manager.libraryPersistence.invalidatePendingWrites()
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: root)
+        }
+        XCTAssertTrue(model.indexing)
+        host.rootView = AnyView(EmptyView())
+        host.layoutSubtreeIfNeeded()
+        for _ in 0..<200 where model.indexing || model.searching {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertFalse(model.indexing)
+        XCTAssertNil(model.importError)
+        XCTAssertEqual(model.hits.map(\.program.title), ["Background news"])
+        XCTAssertFalse(model.searching)
+        var idleUpdates = 0
+        let observation = model.objectWillChange.sink { idleUpdates += 1 }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        observation.cancel()
+        XCTAssertEqual(idleUpdates, 0, "Completed work must leave the closed search idle")
+        let completedRequests = await downloads.requests()
+        XCTAssertEqual(completedRequests, 1)
+        host.rootView = AnyView(GuideSearchView(manager: manager))
+        host.layoutSubtreeIfNeeded()
+        XCTAssertTrue(manager.guideSearchModel === model)
+        XCTAssertEqual(model.query, "background")
+        XCTAssertEqual(model.hits.count, 1)
+        let requests = await downloads.requests()
+        XCTAssertEqual(requests, 1, "Reopening must reuse the completed guide update")
+    }
+    #endif
+
     func testChannelViewUsesSharedXMLTVAndRetainsListingsOnFailedRefresh() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("shared-guide-tests-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
