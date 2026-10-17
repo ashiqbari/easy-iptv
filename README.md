@@ -213,7 +213,7 @@ cd swift-sources
 ./run_app.command
 ```
 
-To assemble the app without a disk image:
+Local runs and app-only builds use Debug and reuse the SwiftPM cache. To assemble the app without a disk image:
 
 ```bash
 ./build_dmg.sh --build-only
@@ -229,6 +229,8 @@ To create the app and DMG installer:
 
 Output: `swift-sources/EasyIPTV-macOS.dmg`.
 
+Use `--release` for an optimized app-only build, or `--clean` to discard the cache explicitly. DMG builds default to Release. Batch small UI edits before packaging; use focused checks while iterating.
+
 The packaging script embeds VLCKit and applies an **ad-hoc code signature**.
 For the full build and release instructions, see [Getting Started](GETTINGSTARTED.md).
 
@@ -237,27 +239,30 @@ For the full build and release instructions, see [Getting Started](GETTINGSTARTE
 ### Tests & commit checks
 
 Run the full suite with `cd swift-sources && swift test -c release`.
+Check packaging flags and cache handling without compiling with
+`./scripts/test-build-workflow.sh` from the repository root.
 The suite includes playback/resume, subtitles, lifecycle cancellation, cache
-persistence, and pre-commit integration tests. Provider requests are mocked in
+persistence, and Git hook integration tests. Provider requests are mocked in
 lifecycle tests; hook tests use disposable repositories and do not commit here.
 
-Install the versioned pre-commit hook once per clone from the repository root:
+Install the versioned Git hooks once per clone from the repository root:
 
 ```sh
 ./.githooks/install.sh
 ```
 
-Every commit then runs the full release test suite. Failed tests, compilation
-errors, or a missing Swift toolchain block the commit. The hook does not stage
-files or create commits. It tests the working tree, so stage all intended source
-changes before committing. The installer preserves a different existing hook
+Commits check staged whitespace quickly. Each push runs the full release test
+suite once, even when pushing several commits. Failed tests, compilation errors,
+or a missing Swift toolchain block the push. Hooks do not stage files or create
+commits. Tests use the working tree, so commit intended source changes before
+pushing. The installer preserves a different existing hook
 configuration instead of silently replacing it.
 
 ### Find your way around
 
 - `swift-sources/` — Native Swift app, VLC dependency configuration, and build scripts.
 - `swift-sources/Tests/` — Playback, subtitles, guide, lifecycle, and UI regression tests.
-- `.githooks/` — Versioned pre-commit hook and installer.
+- `.githooks/` — Fast commit checks, full pre-push tests, and installer.
 - `.github/workflows/release.yml` — macOS DMG build and GitHub Release workflow.
 
 ### Home dashboard

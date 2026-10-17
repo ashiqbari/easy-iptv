@@ -8,6 +8,6 @@ if [ -n "$existing" ] && [ "$existing" != '.githooks' ]; then
     exit 1
 fi
 
-chmod +x "$repo_root/.githooks/pre-commit"
+chmod +x "$repo_root/.githooks/pre-commit" "$repo_root/.githooks/pre-push"
 git config --local core.hooksPath .githooks
-printf '%s\n' 'Installed EasyIPTV pre-commit tests for this checkout.'
+printf '%s\n' 'Installed EasyIPTV commit checks and pre-push tests for this checkout.'

@@ -2,27 +2,49 @@ import XCTest
 import Foundation
 
 /// Real git commits in disposable repositories; Swift itself is stubbed so
-/// testing the pre-commit hook does not recursively run this test suite.
+/// testing the push hook does not recursively run this test suite.
 final class PreCommitHookTests: XCTestCase {
-    func testPassingTestsAllowCommitAndRunFullReleaseSuite() throws {
-        let fixture = try HookFixture(exitCode: 0)
-        defer { fixture.remove() }
-        let result = try fixture.commit()
-        XCTAssertEqual(result.status, 0, result.output)
-        let log = try String(contentsOf: fixture.log, encoding: .utf8)
-        XCTAssertTrue(log.contains("test -c release"))
-        XCTAssertTrue(log.contains(fixture.root.appendingPathComponent("swift-sources").path))
-        XCTAssertEqual(try fixture.git(["rev-parse", "--verify", "HEAD"]).status, 0)
-    }
-
-    func testFailingTestsBlockCommitAndLeaveIndexUntouched() throws {
+    func testCommitDoesNotRunSwift() throws {
         let fixture = try HookFixture(exitCode: 27)
         defer { fixture.remove() }
         let result = try fixture.commit()
-        XCTAssertNotEqual(result.status, 0)
-        XCTAssertTrue(result.output.contains("Commit blocked"))
-        XCTAssertNotEqual(try fixture.git(["rev-parse", "--verify", "HEAD"]).status, 0)
+        XCTAssertEqual(result.status, 0, result.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.log.path))
+    }
+
+    func testWhitespaceBlocksCommitAndPreservesIndex() throws {
+        let fixture = try HookFixture(exitCode: 0)
+        defer { fixture.remove() }
+        try "trailing space \n".write(to: fixture.root.appendingPathComponent("fixture.txt"), atomically: true, encoding: .utf8)
+        _ = try fixture.git(["add", "fixture.txt"])
+        XCTAssertNotEqual(try fixture.commit().status, 0)
         XCTAssertEqual(try fixture.git(["diff", "--cached", "--name-only"]).output.trimmingCharacters(in: .whitespacesAndNewlines), "fixture.txt")
+    }
+
+    func testOnePushTestsMultipleCommitsOnce() throws {
+        let fixture = try HookFixture(exitCode: 0)
+        defer { fixture.remove() }
+        XCTAssertEqual(try fixture.commit().status, 0)
+        try "second revision".write(to: fixture.root.appendingPathComponent("fixture.txt"), atomically: true, encoding: .utf8)
+        _ = try fixture.git(["add", "fixture.txt"])
+        XCTAssertEqual(try fixture.commit().status, 0)
+        let result = try fixture.push()
+        XCTAssertEqual(result.status, 0, result.output)
+        let log = try String(contentsOf: fixture.log, encoding: .utf8)
+        XCTAssertEqual(log.components(separatedBy: "test -c release").count - 1, 1)
+        XCTAssertTrue(log.contains(fixture.root.appendingPathComponent("swift-sources").path))
+        XCTAssertEqual(try fixture.git(["--git-dir=remote.git", "rev-parse", "--verify", "refs/heads/main"]).status, 0)
+    }
+
+    func testFailingTestsBlockPushButKeepCommit() throws {
+        let fixture = try HookFixture(exitCode: 27)
+        defer { fixture.remove() }
+        XCTAssertEqual(try fixture.commit().status, 0)
+        let result = try fixture.push()
+        XCTAssertNotEqual(result.status, 0)
+        XCTAssertTrue(result.output.contains("Push blocked"))
+        XCTAssertEqual(try fixture.git(["rev-parse", "--verify", "HEAD"]).status, 0)
+        XCTAssertNotEqual(try fixture.git(["--git-dir=remote.git", "rev-parse", "--verify", "refs/heads/main"]).status, 0)
     }
 
     func testInstallerPreservesExistingHookConfiguration() throws {
@@ -41,6 +63,7 @@ final class PreCommitHookTests: XCTestCase {
             let result = try fixture.run("/bin/sh", [fixture.root.appendingPathComponent(".githooks/install.sh").path])
             XCTAssertEqual(result.status, 0, result.output)
         }
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: fixture.root.appendingPathComponent(".githooks/pre-push").path))
         XCTAssertEqual(try fixture.git(["config", "--get", "core.hooksPath"]).output.trimmingCharacters(in: .whitespacesAndNewlines), ".githooks")
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: fixture.root.appendingPathComponent(".githooks/pre-commit").path))
     }
@@ -50,7 +73,7 @@ final class PreCommitHookTests: XCTestCase {
         defer { fixture.remove() }
         try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("bin/swift"))
         try FileManager.default.createSymbolicLink(atPath: fixture.root.appendingPathComponent("bin/git").path, withDestinationPath: "/usr/bin/git")
-        let result = try fixture.run("/bin/sh", [fixture.root.appendingPathComponent(".githooks/pre-commit").path], path: fixture.root.appendingPathComponent("bin").path)
+        let result = try fixture.run("/bin/sh", [fixture.root.appendingPathComponent(".githooks/pre-push").path], path: fixture.root.appendingPathComponent("bin").path)
         XCTAssertNotEqual(result.status, 0)
         XCTAssertTrue(result.output.contains("Swift is unavailable"))
     }
@@ -67,13 +90,14 @@ private struct HookFixture {
             try files.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
         }
         let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        for name in ["pre-commit", "install.sh"] {
+        for name in ["pre-commit", "pre-push", "install.sh"] {
             try files.copyItem(at: repo.appendingPathComponent(".githooks/\(name)"), to: root.appendingPathComponent(".githooks/\(name)"))
         }
         let stub = root.appendingPathComponent("bin/swift")
-        try "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$*\" > \"$HOOK_TEST_LOG\"\nexit \(exitCode)\n".write(to: stub, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nprintf '%s\\n' \"$PWD\" \"$*\" >> \"$HOOK_TEST_LOG\"\nexit \(exitCode)\n".write(to: stub, atomically: true, encoding: .utf8)
         try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
         try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.appendingPathComponent(".githooks/pre-commit").path)
+        try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.appendingPathComponent(".githooks/pre-push").path)
         _ = try git(["init", "-q"])
         _ = try git(["config", "core.hooksPath", ".githooks"])
         try "fixture".write(to: root.appendingPathComponent("fixture.txt"), atomically: true, encoding: .utf8)
@@ -82,6 +106,11 @@ private struct HookFixture {
 
     func commit() throws -> (status: Int32, output: String) {
         try git(["-c", "user.name=Hook Test", "-c", "user.email=hook-test@example.invalid", "-c", "commit.gpgSign=false", "commit", "-qm", "fixture"])
+    }
+
+    func push() throws -> (status: Int32, output: String) {
+        _ = try git(["init", "--bare", "-q", "remote.git"])
+        return try git(["push", "./remote.git", "HEAD:refs/heads/main"])
     }
 
     func git(_ arguments: [String]) throws -> (status: Int32, output: String) { try run("/usr/bin/git", arguments) }

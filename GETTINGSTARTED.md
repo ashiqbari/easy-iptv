@@ -14,7 +14,7 @@ From the repository root, run:
 cd swift-sources
 ./run_app.command
 ```
-The run script embeds VLCKit beside the executable before launching, so the VLC fallback works outside the app bundle too.
+The run script incrementally builds and launches a signed Debug app bundle with VLCKit embedded.
 
 ---
 
@@ -34,7 +34,9 @@ cd swift-sources
 ./build_dmg.sh --build-only
 ```
 
-The app bundle will be at `swift-sources/build/EasyIPTV.app`.
+The app bundle will be at `swift-sources/build/EasyIPTV.app`. App-only builds default to Debug; add `--release` for an optimized build. DMG builds default to Release. Both reuse the SwiftPM cache; add `--clean` only when a fresh build is needed.
+
+Batch small UI edits before assembling the app. Use focused checks during development; installed Git hooks check staged whitespace on commit and run the full test suite once before push (see README).
 
 The script will:
 1. Resolve the SwiftPM VLC dependency and compile the native binary.
@@ -46,4 +48,4 @@ The script will:
 
 ## 🤖 Automated GitHub Release Workflow
 
-See [`.github/workflows/release.yml`](.github/workflows/release.yml). Pushing any tag starting with `v` (e.g. `git tag v1.0.0 && git push origin v1.0.0`) automatically builds the app on a macOS runner and attaches the generated `EasyIPTV-macOS.dmg` to a new GitHub Release.
+See [`.github/workflows/release.yml`](.github/workflows/release.yml). Pushing any tag starting with `v` (e.g. `git tag v1.0.0 && git push origin v1.0.0`) automatically performs a clean Release build on a macOS runner and attaches the generated `EasyIPTV-macOS.dmg` to a new GitHub Release.

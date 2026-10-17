@@ -8,11 +8,18 @@
 set -e
 
 BUILD_ONLY=false
-if [ "${1:-}" = "--build-only" ]; then
-    BUILD_ONLY=true
-elif [ "$#" -gt 0 ]; then
-    echo "Usage: $0 [--build-only]"
-    exit 2
+CLEAN=false
+CONFIGURATION=""
+for argument in "$@"; do
+    case "$argument" in
+        --build-only) BUILD_ONLY=true ;;
+        --release) CONFIGURATION=release ;;
+        --clean) CLEAN=true ;;
+        *) echo "Usage: $0 [--build-only] [--release] [--clean]"; exit 2 ;;
+    esac
+done
+if [ -z "$CONFIGURATION" ]; then
+    if [ "$BUILD_ONLY" = true ]; then CONFIGURATION=debug; else CONFIGURATION=release; fi
 fi
 
 APP_NAME="EasyIPTV"
@@ -54,30 +61,31 @@ ARCH=$(uname -m)
 echo -e "${YELLOW}Architecture:${NC} ${ARCH}"
 echo -e "${YELLOW}macOS SDK:${NC}    ${SDK_PATH}"
 
-# Clean previous build artifacts
-echo -e "\n${BLUE}[1/4] Cleaning previous build artifacts...${NC}"
-rm -rf "${BUILD_DIR}" ".build"
+# Recreate the app bundle without discarding SwiftPM's incremental compilation cache.
+echo -e "\n${BLUE}[1/4] Preparing app bundle...${NC}"
+rm -rf "${BUILD_DIR}"
+if [ "${CLEAN}" = true ]; then rm -rf ".build"; fi
 if [ "${BUILD_ONLY}" = false ]; then
     rm -f "${DMG_NAME}"
 fi
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}"
 
 # Compile through SwiftPM so the VLCKit binary dependency is linked correctly.
-echo -e "${BLUE}[2/4] Compiling native Swift, AVKit, and VLC sources for macOS 15+...${NC}"
+echo -e "${BLUE}[2/4] Building ${CONFIGURATION} Swift, AVKit, and VLC sources for macOS 15+...${NC}"
 if ! command -v swift &> /dev/null; then
     echo -e "${RED}Error: Swift Package Manager is required to build the VLC playback engine.${NC}"
     exit 1
 fi
-if ! swift build -c release; then
+if ! swift build -c "${CONFIGURATION}"; then
     echo -e "${RED}Error: SwiftPM build failed. The VLC playback framework is required; direct swiftc fallback is unavailable.${NC}"
     exit 1
 fi
-if [ ! -f ".build/release/${APP_NAME}" ]; then
+if [ ! -f ".build/${CONFIGURATION}/${APP_NAME}" ]; then
     echo -e "${RED}Error: SwiftPM build did not produce ${APP_NAME}.${NC}"
     exit 1
 fi
-cp ".build/release/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
-for RESOURCE_BUNDLE in .build/release/*.resources; do
+cp ".build/${CONFIGURATION}/${APP_NAME}" "${MACOS_DIR}/${APP_NAME}"
+for RESOURCE_BUNDLE in .build/${CONFIGURATION}/*.resources; do
     if [ -d "${RESOURCE_BUNDLE}" ]; then
         cp -R "${RESOURCE_BUNDLE}" "${MACOS_DIR}/"
     fi
@@ -185,8 +193,8 @@ if [ "${BUILD_ONLY}" = true ]; then
     exit 0
 fi
 
-# The packaged app is self-contained; free SwiftPM's large VLC artifacts before hdiutil duplicates it.
-rm -rf ".build"
+# Clean release jobs can free large VLC artifacts before hdiutil duplicates the app.
+if [ "${CLEAN}" = true ]; then rm -rf ".build"; fi
 
 # Generate the DMG disk image using built-in hdiutil
 echo -e "${BLUE}[4/4] Creating ${DMG_NAME} using native hdiutil...${NC}"

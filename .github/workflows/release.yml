@@ -37,7 +37,7 @@ jobs:
         run: |
           cd swift-sources
           chmod +x build_dmg.sh run_app.command
-          ./build_dmg.sh
+          ./build_dmg.sh --clean
           ls -lh EasyIPTV-macOS.dmg
 
       - name: Generate SHA256 Checksum

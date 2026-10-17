@@ -18,11 +18,11 @@ This repository contains the native SwiftUI app in `swift-sources/`. Keep applic
 
 Run commands from `swift-sources/`:
 
-- Compile the Swift package: `swift build -c release`
-- Assemble and sign the `.app` without a DMG: `./build_dmg.sh --build-only` (output: `build/EasyIPTV.app`)
-- Assemble the app and DMG: `./build_dmg.sh` (output: `EasyIPTV-macOS.dmg`)
+- Compile incrementally for development: `swift build`
+- Assemble and sign the `.app` without a DMG (Debug): `./build_dmg.sh --build-only` (output: `build/EasyIPTV.app`)
+- Assemble the Release app and DMG: `./build_dmg.sh` (output: `EasyIPTV-macOS.dmg`)
 - Build and launch locally: `./run_app.command`
 
-The packaging script embeds VLCKit into the app bundle. SwiftPM must successfully build the VLC dependency; a direct `swiftc` fallback does not produce the required app. Use the build-only option when a DMG is not needed.
+The packaging script embeds VLCKit into the app bundle. SwiftPM must successfully build the VLC dependency; a direct `swiftc` fallback does not produce the required app. Use the build-only option when a DMG is not needed. Builds preserve the SwiftPM cache; use `--release` for an optimized app-only build or `--clean` for an explicit fresh build. Batch small UI edits before packaging and run focused checks during iteration. Installed Git hooks check staged whitespace on commit and run the full Release test suite once before push.
 
 See the root `README.md` for the project overview and `GETTINGSTARTED.md` for setup and release instructions.
