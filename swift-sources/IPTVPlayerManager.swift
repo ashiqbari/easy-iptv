@@ -1598,14 +1598,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func toggleFullscreen() {
         #if os(macOS)
         if let window = NSApplication.shared.keyWindow ?? NSApplication.shared.mainWindow {
-            let enteringFullscreen = !window.styleMask.contains(.fullScreen)
-            if enteringFullscreen {
-                isFullscreen = true
-                columnVisibility = .detailOnly
-                window.toolbar?.isVisible = false
-                window.titleVisibility = .hidden
-            }
-            window.toggleFullScreen(nil)
+            toggleFullscreen(in: window)
         }
         #else
         isFullscreen.toggle()
@@ -1614,6 +1607,16 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     #if os(macOS)
+    func toggleFullscreen(in window: NSWindow) {
+        if !window.styleMask.contains(.fullScreen) {
+            isFullscreen = true
+            columnVisibility = .detailOnly
+            window.toolbar?.isVisible = false
+            window.titleVisibility = .hidden
+        }
+        window.toggleFullScreen(nil)
+    }
+
     /// Keeps SwiftUI's fullscreen state aligned with the native window transition.
     public func updateFullscreenState(_ isFullscreen: Bool, window: NSWindow? = nil) {
         self.isFullscreen = isFullscreen

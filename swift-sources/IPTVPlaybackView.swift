@@ -206,6 +206,39 @@ private extension View {
 }
 #endif
 
+#if os(macOS)
+private struct PlaybackVideoClicks: NSViewRepresentable {
+    let manager: IPTVPlayerManager
+    func makeNSView(context: Context) -> PlaybackVideoClickNSView { PlaybackVideoClickNSView(manager: manager) }
+    func updateNSView(_ view: PlaybackVideoClickNSView, context: Context) { }
+}
+
+private final class PlaybackVideoClickNSView: NSView {
+    private weak var manager: IPTVPlayerManager?
+    init(manager: IPTVPlayerManager) { self.manager = manager; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2, let window { manager?.toggleFullscreen(in: window) }
+        else if event.clickCount == 1 { manager?.toggleVideoControls() }
+    }
+}
+#endif
+
+private extension View {
+    func playbackVideoGestures(_ manager: IPTVPlayerManager) -> some View {
+        #if os(macOS)
+        overlay { PlaybackVideoClicks(manager: manager) }
+        #else
+        gesture(TapGesture(count: 2).exclusively(before: TapGesture(count: 1)).onEnded { tap in
+            switch tap {
+            case .first: manager.toggleFullscreen()
+            case .second: manager.toggleVideoControls()
+            }
+        })
+        #endif
+    }
+}
+
 private struct EpisodePositions: PreferenceKey {
     static var defaultValue: [Int: CGFloat] = [:]
     static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
@@ -248,8 +281,7 @@ public struct IPTVPlaybackView: View {
                             .overlay {
                                 Color.clear
                                     .contentShape(Rectangle())
-                                    .onTapGesture(count: 2) { manager.toggleFullscreen() }
-                                    .onTapGesture(count: 1) { manager.toggleVideoControls() }
+                                    .playbackVideoGestures(manager)
                             }
                         SubtitleOverlay(controller: manager.subtitles, controlsVisible: manager.showVideoControls)
                         if manager.isBuffering { bufferingOverlay }
@@ -345,12 +377,7 @@ public struct IPTVPlaybackView: View {
                     .overlay(
                         Color.clear
                             .contentShape(Rectangle())
-                            .onTapGesture(count: 2) {
-                                manager.toggleFullscreen()
-                            }
-                            .onTapGesture(count: 1) {
-                                manager.toggleVideoControls()
-                            }
+                            .playbackVideoGestures(manager)
                     )
                 
                 SubtitleOverlay(controller: manager.subtitles, controlsVisible: manager.showVideoControls)
@@ -407,6 +434,8 @@ public struct IPTVPlaybackView: View {
                 endPoint: .bottom
             )
             .ignoresSafeArea()
+            .contentShape(Rectangle())
+            .playbackVideoGestures(manager)
         )
     }
     

@@ -1,9 +1,60 @@
 import XCTest
 import AppKit
+import SwiftUI
 @testable import EasyIPTV
 
 @MainActor
 final class PlaybackControlsTests: XCTestCase {
+    func testDoubleClickVideoTogglesFullscreenWithVisibleAndHiddenControls() async throws {
+        _ = NSApplication.shared
+        let activationPolicy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        defer { NSApp.setActivationPolicy(activationPolicy) }
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        for useVLC in [false, true] {
+            let suite = "double-click-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+            let manager = IPTVPlayerManager(progressDefaults: defaults)
+            manager.playDirectStream(M3UItem(name: "Fixture", streamURL: url, contentType: .movie))
+            if useVLC { manager.playCurrentStreamWithVLC() }
+            let hosting = NSHostingView(rootView: IPTVPlaybackView(manager: manager))
+            let window = FullscreenRequestWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 650), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = hosting
+            window.makeKeyAndOrderFront(nil)
+            window.becomeKey()
+            defer {
+                manager.stop()
+                manager.libraryPersistence.invalidatePendingWrites()
+                window.close()
+                defaults.removePersistentDomain(forName: suite)
+            }
+            let player = manager.player, vlcPlayer = manager.vlcPlayer
+            for visible in [true, false] {
+                manager.cancelControlsAutoHide()
+                manager.showVideoControls = visible
+                for _ in 0..<10 { hosting.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 30_000_000) }
+                let before = window.fullscreenRequests
+                // shortcut: this fixed point is empty video space; update it if the playback HUD layout changes.
+                let point = hosting.convert(NSPoint(x: 250, y: 240), to: nil)
+                for count in [1, 2] {
+                    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                            context: nil, eventNumber: 0, clickCount: count, pressure: 1))
+                        NSApp.sendEvent(event)
+                    }
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                }
+                try await Task.sleep(nanoseconds: 400_000_000)
+                XCTAssertEqual(window.fullscreenRequests, before + 1, "Engine VLC=\(useVLC), controls visible=\(visible)")
+                XCTAssertTrue(manager.player === player)
+                XCTAssertTrue(manager.vlcPlayer === vlcPlayer)
+            }
+        }
+    }
+
     func testPlaybackBadgeDistinguishesContentAndKnownLivePosition() {
         func item(_ type: M3UItem.ContentType, _ extensionName: String = "ts") -> M3UItem {
             M3UItem(name: "Badge fixture", streamURL: URL(fileURLWithPath: "/private/tmp/badge.\(extensionName)"), contentType: type)
@@ -235,4 +286,9 @@ final class PlaybackControlsTests: XCTestCase {
         XCTAssertFalse(window.acceptsMouseMovedEvents)
         XCTAssertFalse(manager.pointerInsidePlayer)
     }
+}
+
+private final class FullscreenRequestWindow: NSWindow {
+    var fullscreenRequests = 0
+    override func toggleFullScreen(_ sender: Any?) { fullscreenRequests += 1 }
 }
