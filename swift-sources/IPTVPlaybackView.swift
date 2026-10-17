@@ -682,7 +682,6 @@ public struct IPTVPlaybackView: View {
             ViewThatFits(in: .horizontal) {
                 bottomActions.fixedSize(horizontal: true, vertical: false)
                 VStack(alignment: .leading, spacing: 8) {
-                    streamStatus
                     HStack {
                         episodeAndSubtitleControls.labelStyle(.iconOnly)
                         aspectRatioControl
@@ -701,25 +700,11 @@ public struct IPTVPlaybackView: View {
 
     private var bottomActions: some View {
         HStack {
-            streamStatus
             Spacer()
             episodeAndSubtitleControls
             aspectRatioControl
             volumeControls
             playbackActions
-        }
-    }
-
-    @ViewBuilder
-    private var streamStatus: some View {
-        if let channel = manager.currentChannel {
-            HStack(spacing: 8) {
-                Image(systemName: channel.isVOD ? "film.fill" : "antenna.radiowaves.left.and.right")
-                    .foregroundColor(channel.isVOD ? .purple : .green)
-                Text(channel.isVOD ? "MP4 Video Stream" : (channel.isHLS ? "Apple HLS (m3u8)" : "Direct Stream"))
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.8))
-            }
         }
     }
 
