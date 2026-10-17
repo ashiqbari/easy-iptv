@@ -110,10 +110,16 @@ struct AudioTrackControl: View {
         }
         .buttonStyle(.plain).accessibilityLabel("Audio tracks").help("Choose audio language or track")
         .popover(isPresented: $controller.showingMenu) { AudioTrackMenu(controller: controller) }
-        .onChange(of: controller.showingMenu) { showing in
-            if showing { manager.cancelControlsAutoHide() }
-            else { manager.scheduleControlsAutoHide() }
-        }
+        #if os(macOS)
+        .onChange(of: controller.showingMenu) { _, showing in menuVisibilityChanged(showing) }
+        #else
+        .onChange(of: controller.showingMenu) { showing in menuVisibilityChanged(showing) }
+        #endif
+    }
+
+    private func menuVisibilityChanged(_ showing: Bool) {
+        if showing { manager.cancelControlsAutoHide() }
+        else { manager.scheduleControlsAutoHide() }
     }
 }
 
