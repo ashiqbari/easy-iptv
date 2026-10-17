@@ -89,6 +89,33 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             && resumeRequest == nil && pendingResumePosition == nil && !playbackFinished && errorMessage == nil
     }
 
+    private(set) var libraryNavigationTargetID: UUID?
+    @Published private(set) var libraryNavigationRequest = UUID()
+
+    private func revealLibraryItem(_ item: M3UItem) {
+        let target = libraryItemsByKey[PlaybackProgressStore.key(for: item)] ?? item
+        selectedSection = target.contentType
+        searchText = ""
+        categorySearchText = ""
+        favoritesOnly = false
+        recentlyAddedOnly = false
+        minimumRating = 0
+        selectedCategory = categories.contains(target.displayGroup) ? target.displayGroup : "All"
+        showingDashboard = false
+        libraryNavigationTargetID = target.id
+        libraryNavigationRequest = UUID()
+    }
+
+    func openDashboardItem(_ item: M3UItem, resume: Bool = false) {
+        if isCurrentPlayback(item), player?.currentItem != nil || useVLCPlayback {
+            pictureInPicture.restorePlayer()
+            return
+        }
+        revealLibraryItem(item)
+        if resume { playRecentlyWatched(item, resumeSeries: true) }
+        else { playChannel(item) }
+    }
+
     func returnToPlayerFromPictureInPicture() {
         showingDashboard = false
         showingGuideSearch = false
@@ -100,8 +127,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         showingSubscriptionInfo = false
         showingEPGSheet = false
         catchupChannel = nil
-        if let currentChannel { selectedSection = currentChannel.contentType }
+        let target = currentChannel?.contentType == .series ? (playingSeries?.item ?? currentChannel) : currentChannel
         dismissDetails()
+        if let target { revealLibraryItem(target) }
         #if os(macOS)
         pictureInPicture.activatePlayerWindow()
         #endif

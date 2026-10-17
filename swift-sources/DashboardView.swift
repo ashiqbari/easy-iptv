@@ -40,7 +40,7 @@ struct DashboardView: View {
                     if !resumeItems.isEmpty {
                         sectionHeader("Continue watching", subtitle: "Pick up where you left off", icon: "play.circle.fill")
                         DashboardShelf(items: resumeItems, width: width, cardWidth: min(280, max(140, width - 6))) { entry in
-                            Button { manager.playRecentlyWatched(entry.item, resumeSeries: true) } label: {
+                            Button { manager.openDashboardItem(entry.item, resume: true) } label: {
                                 mediaCard(entry.item, subtitle: entry.subtitle, progress: entry.progress.fraction,
                                           width: min(280, max(140, width - 6)), large: true)
                             }
@@ -84,7 +84,7 @@ struct DashboardView: View {
                 Text("Live moments. Movie nights. One place.")
                     .font(.subheadline).foregroundStyle(Color.primary.opacity(0.78))
                 if let current = manager.currentChannel {
-                    Button { manager.showingDashboard = false } label: {
+                    Button { manager.pictureInPicture.restorePlayer() } label: {
                         Label("Back to \(current.name)", systemImage: "play.fill").lineLimit(1)
                     }
                     .buttonStyle(.borderedProminent).tint(palette.controlAccent)
@@ -152,7 +152,7 @@ struct DashboardView: View {
         if !items.isEmpty {
             sectionHeader(title, subtitle: subtitle, icon: icon)
             DashboardShelf(items: items, width: width, cardWidth: min(200, max(140, width - 6))) { item in
-                Button { manager.playChannel(item) } label: {
+                Button { manager.openDashboardItem(item) } label: {
                     mediaCard(item, subtitle: item.contentType == .live ? "Watch live" : item.contentType.rawValue,
                               width: min(200, max(140, width - 6)))
                 }

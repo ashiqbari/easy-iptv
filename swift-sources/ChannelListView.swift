@@ -29,6 +29,7 @@ public struct ChannelListView: View {
     
     @Environment(\.appPalette) private var palette
     @ObservedObject var manager: IPTVPlayerManager
+    @State private var revealedNavigationRequest: UUID?
     #if !os(macOS)
     @State private var showingGuideSearch = false
     #endif
@@ -183,30 +184,57 @@ public struct ChannelListView: View {
 
     /// Main Channel List
     private var channelListContent: some View {
-        Group {
-            #if os(macOS)
-            // NSTableView measures inserted rows eagerly; All can exhaust SwiftUI's graph storage.
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(manager.filteredChannels) { channel in
-                        channelRow(channel)
-                            .padding(.horizontal, 12)
+        ScrollViewReader { proxy in
+            Group {
+                #if os(macOS)
+                // NSTableView measures inserted rows eagerly; All can exhaust SwiftUI's graph storage.
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(manager.filteredChannels) { channel in
+                            channelRow(channel)
+                                .padding(.horizontal, 12)
+                        }
                     }
+                    .padding(.vertical, 10)
                 }
-                .padding(.vertical, 10)
+                #else
+                List(manager.filteredChannels) { channel in
+                    channelRow(channel)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+                }
+                .listStyle(.plain)
+                #endif
+            }
+            .transaction {
+                // Restoring All can insert thousands of rows in a single update.
+                $0.animation = nil
+                $0.disablesAnimations = true
+            }
+            .onAppear { revealNavigationTarget(using: proxy) }
+            #if os(macOS)
+            .onChange(of: manager.libraryNavigationRequest) { _, _ in revealNavigationTarget(using: proxy) }
+            .onChange(of: manager.isFilteringLibrary) { _, filtering in
+                if !filtering { revealNavigationTarget(using: proxy) }
             }
             #else
-            List(manager.filteredChannels) { channel in
-                channelRow(channel)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12))
+            .onChange(of: manager.libraryNavigationRequest) { _ in revealNavigationTarget(using: proxy) }
+            .onChange(of: manager.isFilteringLibrary) { filtering in
+                if !filtering { revealNavigationTarget(using: proxy) }
             }
-            .listStyle(.plain)
             #endif
         }
-        .transaction {
-            // Restoring All can insert thousands of rows in a single update.
-            $0.animation = nil
-            $0.disablesAnimations = true
+    }
+
+    private func revealNavigationTarget(using proxy: ScrollViewProxy) {
+        let request = manager.libraryNavigationRequest
+        guard revealedNavigationRequest != request, !manager.isFilteringLibrary,
+              let target = manager.libraryNavigationTargetID else { return }
+        Task { @MainActor in
+            await Task.yield()
+            guard manager.libraryNavigationRequest == request, revealedNavigationRequest != request,
+                  !manager.isFilteringLibrary, manager.filteredChannels.contains(where: { $0.id == target }) else { return }
+            proxy.scrollTo(target, anchor: .center)
+            revealedNavigationRequest = request
         }
     }
 

@@ -60,6 +60,112 @@ final class DashboardTests: XCTestCase {
         XCTAssertTrue(manager.dashboardCounts.isEmpty)
     }
 
+    func testDashboardItemsRestoreSectionCategoryAndVisibleTarget() async throws {
+        let suite = "dashboard-routes-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let live = M3UItem(name: "News channel", groupTitle: "News", streamURL: URL(fileURLWithPath: "/private/tmp/dashboard-live.mov"), contentType: .live)
+        let movie = M3UItem(name: "Movie", groupTitle: "Action", streamURL: URL(fileURLWithPath: "/private/tmp/dashboard-movie.mov"), contentType: .movie)
+        let show = M3UItem(name: "Show", groupTitle: "Comedy", streamURL: URL(fileURLWithPath: "/private/tmp/dashboard-show.mov"), contentType: .series)
+        var loader = LibraryLoader()
+        loader.playlist = { _ in [live, movie, show] }
+        loader.seriesDetails = { _ in SeriesDetails(details: nil, episodes: []) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites(); defaults.removePersistentDomain(forName: suite) }
+        await manager.loadPlaylist(from: "https://fixture.invalid/dashboard")
+        manager.recentlyWatchedStore.record(live)
+        for target in [live, movie, show] {
+            manager.browse(target.contentType == .movie ? .series : .movie)
+            manager.selectedCategory = "Recently Watched"
+            manager.searchText = "unrelated search"
+            manager.categorySearchText = "unrelated category"
+            manager.favoritesOnly = true
+            manager.recentlyAddedOnly = true
+            manager.minimumRating = 9
+            manager.showingDashboard = true
+            manager.openDashboardItem(target, resume: target.contentType == .live)
+            XCTAssertFalse(manager.showingDashboard)
+            XCTAssertEqual(manager.selectedSection, target.contentType)
+            XCTAssertEqual(manager.selectedCategory, target.displayGroup)
+            XCTAssertEqual(manager.libraryNavigationTargetID, target.id)
+            XCTAssertTrue(manager.filteredChannels.contains { $0.id == target.id })
+            XCTAssertEqual(manager.searchText, "")
+            XCTAssertEqual(manager.categorySearchText, "")
+            XCTAssertFalse(manager.favoritesOnly)
+            XCTAssertFalse(manager.recentlyAddedOnly)
+            XCTAssertEqual(manager.minimumRating, 0)
+            if target.contentType == .live { XCTAssertEqual(manager.currentChannel?.id, live.id) }
+            if target.contentType == .movie { XCTAssertEqual(manager.movieOverviewItem?.id, movie.id) }
+            if target.contentType == .series {
+                XCTAssertTrue(manager.isViewingSeriesDetails)
+                XCTAssertEqual(manager.seriesDetailsItem?.id, show.id)
+                XCTAssertNil(manager.player, "Opening a favorite show must not autoplay an episode")
+            }
+            manager.stop()
+        }
+    }
+
+    func testContinueWatchingSeriesAndBackRestoreShowCategoryWithoutReload() async throws {
+        let suite = "dashboard-series-route-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let url = try await silentMedia()
+        let show = M3UItem(name: "Show", groupTitle: "Drama", streamURL: URL(fileURLWithPath: "/private/tmp/dashboard-series-overview.mov"), contentType: .series, seriesID: "42")
+        let episode = M3UItem(name: "Episode", groupTitle: "Season 2", streamURL: url, contentType: .series, seriesID: "42", seasonNumber: 2, episodeNumber: 3)
+        var loader = LibraryLoader()
+        loader.playlist = { _ in [show] }
+        loader.seriesDetails = { _ in SeriesDetails(details: nil, episodes: [episode]) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url) }
+        await manager.loadPlaylist(from: "https://fixture.invalid/dashboard")
+        manager.recentlyWatchedStore.record(episode, series: show)
+        manager.progressStore.save(item: episode, position: 120, duration: 300)
+        manager.browse(.live)
+        manager.showingDashboard = true
+        manager.openDashboardItem(show, resume: true)
+        try await waitForDashboard { manager.currentChannel?.id == episode.id }
+        XCTAssertEqual(manager.selectedSection, .series)
+        XCTAssertEqual(manager.selectedCategory, "Drama")
+        XCTAssertEqual(manager.libraryNavigationTargetID, show.id)
+        let player = try XCTUnwrap(manager.player)
+        let playerItem = try XCTUnwrap(player.currentItem)
+        #if os(macOS)
+        let hosting = NSHostingView(rootView: ContentView(manager: manager))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.close() }
+        try await waitForDashboard { hosting.layoutSubtreeIfNeeded(); return manager.isPlaying && manager.pictureInPicture.isPossible }
+        #endif
+        manager.browse(.movie)
+        manager.searchText = "stale search"
+        manager.showingDashboard = true
+        #if os(macOS)
+        try await waitForDashboard { manager.pictureInPicture.isActive }
+        #endif
+        manager.pictureInPicture.restorePlayer()
+        XCTAssertFalse(manager.pictureInPicture.isActive)
+        XCTAssertFalse(manager.showingDashboard)
+        XCTAssertFalse(manager.isViewingSeriesDetails)
+        XCTAssertEqual(manager.selectedSection, .series)
+        XCTAssertEqual(manager.selectedCategory, "Drama", "Use the show's category, not the episode's season")
+        XCTAssertEqual(manager.selectedSeason, "Season 2")
+        XCTAssertEqual(manager.libraryNavigationTargetID, show.id)
+        XCTAssertEqual(manager.currentChannel?.id, episode.id)
+        XCTAssertTrue(manager.player === player)
+        XCTAssertTrue(player.currentItem === playerItem)
+        manager.showingDashboard = true
+        manager.openDashboardItem(show, resume: true)
+        XCTAssertTrue(manager.player === player, "Continue watching the active show must return without a reload")
+    }
+
+    private func waitForDashboard(_ condition: () -> Bool) async throws {
+        for _ in 0..<500 {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTFail("Dashboard navigation did not finish")
+        throw NSError(domain: "DashboardTests", code: 1)
+    }
+
     func testDashboardDoesNotTruncateLargeSections() async {
         let suite = "dashboard-capacity-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
@@ -110,6 +216,43 @@ final class DashboardTests: XCTestCase {
         scroll.reflectScrolledClipView(scroll.contentView)
         XCTAssertGreaterThan(scroll.documentVisibleRect.minX, 0)
         XCTAssertEqual(scroll.documentVisibleRect.maxX, document.bounds.maxX, accuracy: 1)
+    }
+
+    func testDashboardNavigationScrollsToTargetAfterAsyncFiltering() async throws {
+        let suite = "dashboard-scroll-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let movies = (0..<1200).map { index in
+            M3UItem(name: "Movie \(index)", groupTitle: "Action", streamURL: URL(fileURLWithPath: "/private/tmp/dashboard-scroll-\(index).mov"), contentType: .movie)
+        }
+        var loader = LibraryLoader()
+        loader.playlist = { _ in movies }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer { manager.stop(); manager.libraryPersistence.invalidatePendingWrites(); defaults.removePersistentDomain(forName: suite) }
+        await manager.loadPlaylist(from: "https://fixture.invalid/dashboard")
+        manager.librarySortOrder = .nameAscending
+        manager.openDashboardItem(movies[1100])
+        let hosting = NSHostingView(rootView: ChannelListView(manager: manager))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.close() }
+        func findScroll(_ view: NSView) -> NSScrollView? {
+            (view as? NSScrollView) ?? view.subviews.lazy.compactMap { findScroll($0) }.first
+        }
+        try await waitForDashboard {
+            hosting.layoutSubtreeIfNeeded()
+            return !manager.isFilteringLibrary && (findScroll(hosting)?.documentVisibleRect.minY ?? 0) > 300
+        }
+        let scroll = try XCTUnwrap(findScroll(hosting))
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        let previous = manager.libraryNavigationRequest
+        manager.openDashboardItem(movies[1100])
+        XCTAssertNotEqual(manager.libraryNavigationRequest, previous)
+        try await waitForDashboard {
+            hosting.layoutSubtreeIfNeeded()
+            return scroll.documentVisibleRect.minY > 300
+        }
     }
 
     func testDashboardLayoutsAndPlayerSurviveHomeNavigation() async throws {
