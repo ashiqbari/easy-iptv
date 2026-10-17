@@ -301,6 +301,61 @@ final class SubtitleTests: XCTestCase {
     }
 
     @MainActor
+    func testTimingAdjustmentAppliesImmediatelyAcrossImportSeekAndReselection() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("subtitle-delay-\(UUID()).srt")
+        try Data(srt.utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let controller = SubtitleController()
+        let movie = M3UItem(name: "Movie", streamURL: URL(string: "https://example.com/movie.mp4")!)
+        controller.reset(for: movie)
+        XCTAssertFalse(controller.supportsTimingAdjustment)
+        controller.updateTime(4.5)
+        controller.setTimingDelay(2)
+        controller.importFile(file)
+        try await waitUntil { !controller.isLoadingFile }
+        XCTAssertNil(controller.errorMessage)
+        XCTAssertTrue(controller.supportsTimingAdjustment)
+        XCTAssertEqual(controller.text, "Hello world & friends\nSecond line")
+        controller.setTimingDelay(0)
+        XCTAssertEqual(controller.text, "Goodbye", "Reset must refresh even while paused")
+        controller.updateTime(3.5)
+        XCTAssertEqual(controller.text, "")
+        controller.setTimingDelay(-0.5)
+        XCTAssertEqual(controller.text, "Goodbye", "Negative delay shows a future cue earlier")
+        controller.clearForSeek()
+        controller.updateTime(0)
+        XCTAssertEqual(controller.text, "")
+        controller.setTimingDelay(2)
+        XCTAssertEqual(controller.text, "", "A negative adjusted clock must not show the first cue")
+        controller.updateTime(4.5)
+        controller.select(nil)
+        XCTAssertFalse(controller.supportsTimingAdjustment)
+        XCTAssertEqual(controller.text, "")
+        controller.select(file.absoluteString)
+        try await waitUntil { !controller.isLoadingFile }
+        XCTAssertEqual(controller.text, "Hello world & friends\nSecond line")
+        controller.reset(for: movie)
+        XCTAssertEqual(controller.timingDelay, 2, "Keep timing when reopening the same media")
+        controller.reset(for: M3UItem(name: "Other", streamURL: URL(string: "https://example.com/other.mp4")!))
+        XCTAssertEqual(controller.timingDelay, 0)
+        XCTAssertEqual(controller.text, "")
+    }
+
+    @MainActor
+    func testTimingAdjustmentRejectsNonfiniteValuesAndBoundsDelay() {
+        let controller = SubtitleController()
+        controller.setTimingDelay(1.5)
+        for invalid in [Double.nan, .infinity, -.infinity] {
+            controller.setTimingDelay(invalid)
+            XCTAssertEqual(controller.timingDelay, 1.5)
+        }
+        controller.setTimingDelay(100)
+        XCTAssertEqual(controller.timingDelay, 60)
+        controller.setTimingDelay(-100)
+        XCTAssertEqual(controller.timingDelay, -60)
+    }
+
+    @MainActor
     private func waitUntil(_ condition: () -> Bool) async throws {
         for _ in 0..<200 {
             if condition() { return }

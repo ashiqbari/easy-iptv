@@ -26,6 +26,7 @@ final class SubtitleController: NSObject, ObservableObject {
     @Published private(set) var isLoadingTracks = false
     @Published private(set) var isLoadingFile = false
     @Published private(set) var errorMessage: String?
+    @Published private(set) var timingDelay = 0.0
     @Published var showingMenu = false
     @Published var fontSize: Double = SubtitleController.savedFontSize() {
         didSet {
@@ -95,6 +96,7 @@ final class SubtitleController: NSObject, ObservableObject {
         avItem = nil
         avGroup = nil
         #if os(macOS)
+        vlcPlayer?.currentVideoSubTitleDelay = 0
         vlcPlayer = nil
         #endif
         if mediaKey != item?.subtitleCacheKey {
@@ -102,6 +104,7 @@ final class SubtitleController: NSObject, ObservableObject {
             Task { await oldCache.cancel() }
             fileCache = SubtitleFileCache()
             providerSources = nil
+            timingDelay = 0
         }
         mediaKey = item?.subtitleCacheKey
         tracks = []
@@ -148,6 +151,7 @@ final class SubtitleController: NSObject, ObservableObject {
     func nativePlayerDidStart() {
         if document != nil || selectedID == nil { vlcPlayer?.currentVideoSubTitleIndex = -1 }
         applyNativeFontSize()
+        applyNativeTiming()
         loadTracksIfNeeded()
     }
     #endif
@@ -271,6 +275,7 @@ final class SubtitleController: NSObject, ObservableObject {
         if let group = avGroup { avItem?.select(nil, in: group) }
         #if os(macOS)
         vlcPlayer?.currentVideoSubTitleIndex = -1
+        vlcPlayer?.currentVideoSubTitleDelay = 0
         #endif
         guard let id, let track = tracks.first(where: { $0.id == id }) else { return }
         switch track.source {
@@ -283,6 +288,7 @@ final class SubtitleController: NSObject, ObservableObject {
             selectedID = id
             vlcPlayer?.currentVideoSubTitleIndex = index
             applyNativeFontSize()
+            applyNativeTiming()
         #endif
         case .file(let source):
             isLoadingFile = true
@@ -294,7 +300,7 @@ final class SubtitleController: NSObject, ObservableObject {
                     guard let self, !Task.isCancelled, self.generation == token, self.selection == selectionToken else { return }
                     self.document = document
                     self.selectedID = id
-                    self.text = document.text(at: self.time)
+                    self.text = document.text(at: self.time - self.timingDelay)
                     self.isLoadingFile = false
                     self.fileSelection = nil
                 } catch {
@@ -327,9 +333,35 @@ final class SubtitleController: NSObject, ObservableObject {
     func updateTime(_ seconds: Double) {
         time = seconds
         if let document {
-            let updated = document.text(at: seconds)
+            let updated = document.text(at: seconds - timingDelay)
             if text != updated { text = updated }
         }
+    }
+
+    var supportsTimingAdjustment: Bool {
+        guard let track = tracks.first(where: { $0.id == selectedID }) else { return false }
+        switch track.source {
+        case .av: return false
+        default: return true
+        }
+    }
+
+    func setTimingDelay(_ seconds: Double) {
+        guard seconds.isFinite else { return }
+        timingDelay = min(60, max(-60, seconds))
+        updateTime(time)
+        applyNativeTiming()
+    }
+
+    private func applyNativeTiming() {
+        #if os(macOS)
+        let isNative = tracks.contains { track in
+            guard track.id == selectedID else { return false }
+            if case .vlc = track.source { return true }
+            return false
+        }
+        vlcPlayer?.currentVideoSubTitleDelay = isNative ? Int((timingDelay * 1_000_000).rounded()) : 0
+        #endif
     }
 
     func clearForSeek() { text = "" }

@@ -58,7 +58,7 @@ struct SubtitleControls: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Subtitles (CC)")
         .accessibilityValue(controller.selectedID == nil ? "Off" : "On")
-        .help("Choose subtitles and text size (Command–Shift–C)")
+        .help("Choose subtitles, timing, and text size (Command–Shift–C)")
         .keyboardShortcut("c", modifiers: [.command, .shift])
         .popover(isPresented: $controller.showingMenu, arrowEdge: .bottom) {
             SubtitleMenuView(controller: controller) {
@@ -147,6 +147,34 @@ struct SubtitleMenuView: View {
                 Text(error).font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 Button("Retry") { controller.retry() }
                     .disabled(controller.isLoadingTracks || controller.isLoadingFile)
+            }
+
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Subtitle timing").font(.headline)
+                Text(controller.timingDelay == 0 ? "No adjustment" :
+                     "\(abs(controller.timingDelay), specifier: "%.1f") seconds \(controller.timingDelay > 0 ? "later" : "earlier")")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Button("Earlier") { controller.setTimingDelay(controller.timingDelay - 0.5) }
+                        .disabled(controller.timingDelay <= -60)
+                        .accessibilityLabel("Show subtitles half a second earlier")
+                    Button("Later") { controller.setTimingDelay(controller.timingDelay + 0.5) }
+                        .disabled(controller.timingDelay >= 60)
+                        .accessibilityLabel("Show subtitles half a second later")
+                    Spacer()
+                    Button("Reset") { controller.setTimingDelay(0) }
+                        .disabled(controller.timingDelay == 0)
+                }
+                .disabled(!controller.supportsTimingAdjustment)
+                if !controller.supportsTimingAdjustment {
+                    Text(controller.selectedID == nil ? "Select a subtitle track to adjust its timing." :
+                         "Timing adjustment for embedded subtitles requires VLC or an external subtitle file.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Divider()
