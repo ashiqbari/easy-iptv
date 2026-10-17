@@ -46,7 +46,6 @@ public struct ContentView: View {
     @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
     #if os(macOS)
     @State private var playbackBounds: CGRect = .zero
-    @State private var showingGuideSearch = false
     #endif
     
     public init(manager: IPTVPlayerManager) {
@@ -166,10 +165,11 @@ public struct ContentView: View {
             Text(request.item.name)
         }
         .onReceive(NotificationCenter.default.publisher(for: Self.backgroundNotification)) { _ in
-            manager.pauseForBackground()
+            if !manager.pictureInPicture.isActive && !manager.pictureInPicture.isStarting { manager.pauseForBackground() }
         }
         #if os(macOS)
-        .sheet(isPresented: $showingGuideSearch) { GuideSearchView(manager: manager) }
+        .background { PictureInPictureWindowTracking(coordinator: manager.pictureInPicture) }
+        .sheet(isPresented: $manager.showingGuideSearch) { GuideSearchView(manager: manager) }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.willEnterFullScreenNotification)) { notification in
             guard let window = notification.object as? NSWindow else { return }
             manager.updateFullscreenState(true, window: window)
@@ -273,7 +273,7 @@ public struct ContentView: View {
                     .keyboardShortcut("2", modifiers: [.command, .shift])
 
                     if manager.selectedSection == .live {
-                        Button { showingGuideSearch = true } label: {
+                        Button { manager.showingGuideSearch = true } label: {
                             Label("Search TV Guide", systemImage: "text.magnifyingglass")
                         }
                         .help("Find channels by current or upcoming programmes")
@@ -474,6 +474,8 @@ public struct ContentView: View {
     private var libraryToolbarControls: some View {
         Group {
             Menu {
+                Toggle("Auto Picture-in-Picture", isOn: $manager.autoPictureInPicture)
+                Divider()
                 AppearancePicker()
             } label: {
                 Label("Appearance", systemImage: "circle.lefthalf.filled")

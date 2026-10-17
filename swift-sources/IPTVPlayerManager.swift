@@ -72,12 +72,48 @@ private final class DisplaySleepManager: @unchecked Sendable {
 /// persistent favorites management, and AVPlayer lifecycle.
 @MainActor
 public final class IPTVPlayerManager: NSObject, ObservableObject {
+    let pictureInPicture = PictureInPictureCoordinator()
+    @Published var autoPictureInPicture = true {
+        didSet {
+            storageDefaults.set(autoPictureInPicture, forKey: "com.iptvplayer.autoPictureInPicture")
+            pictureInPicture.update()
+        }
+    }
+    var isPlayerDestinationVisible: Bool {
+        (!showingDashboard || isFullscreen) && !isViewingMovieDetails && !isViewingSeriesDetails
+            && !showingGuideSearch && !showingDownloads && !showingSources && !showingOrganization && !showingPlaylistSheet
+            && !showingAboutSheet && !showingSubscriptionInfo && !showingEPGSheet && catchupChannel == nil
+    }
+    var canPresentPictureInPicture: Bool {
+        currentChannel != nil && (player?.currentItem != nil || useVLCPlayback)
+            && resumeRequest == nil && pendingResumePosition == nil && !playbackFinished && errorMessage == nil
+    }
+
+    func returnToPlayerFromPictureInPicture() {
+        showingDashboard = false
+        showingGuideSearch = false
+        showingDownloads = false
+        showingSources = false
+        showingOrganization = false
+        showingPlaylistSheet = false
+        showingAboutSheet = false
+        showingSubscriptionInfo = false
+        showingEPGSheet = false
+        catchupChannel = nil
+        if let currentChannel { selectedSection = currentChannel.contentType }
+        dismissDetails()
+        #if os(macOS)
+        pictureInPicture.activatePlayerWindow()
+        #endif
+        pictureInPicture.reconcile()
+    }
+
     let subtitles = SubtitleController()
     let audioTracks = AudioTrackController()
     let sources: SavedSourceStore
-    @Published var showingSources = false
-    @Published var showingOrganization = false
-    @Published var catchupChannel: M3UItem?
+    @Published var showingSources = false { didSet { pictureInPicture.update() } }
+    @Published var showingOrganization = false { didSet { pictureInPicture.update() } }
+    @Published var catchupChannel: M3UItem? { didSet { pictureInPicture.update() } }
     @Published private(set) var catchupOrigin: M3UItem?
     @Published var organization = ChannelOrganization() {
         didSet {
@@ -120,7 +156,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     private(set) var dashboardFavorites: [M3UItem] = []
     private var recordedCurrentPlayback = false
     let downloads: DownloadManager
-    @Published var showingDownloads = false
+    @Published var showingGuideSearch = false { didSet { pictureInPicture.update() } }
+    @Published var showingDownloads = false { didSet { pictureInPicture.update() } }
     var pendingDownload: DownloadRecord?
     var downloadSeriesItem: M3UItem? { seriesOverviewItem }
     var seriesMetadata: MediaDetails? { seriesDetails }
@@ -297,6 +334,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             #endif
             updateRemoteNowPlaying()
             if oldValue != isPlaying {
+                pictureInPicture.update()
                 notePlayerActivity()
                 if isPlaying { markStablePlayback() }
                 else { stablePlaybackTask?.cancel() }
@@ -319,7 +357,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Navigation split view visibility state.
     @Published public var columnVisibility: NavigationSplitViewVisibility = .all
-    @Published var showingDashboard = true
+    @Published var showingDashboard = true { didSet { pictureInPicture.update() } }
 
     func browse(_ section: M3UItem.ContentType) {
         selectedSection = section
@@ -343,7 +381,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     /// Controls whether the playlist input modal is visible.
-    @Published public var showingPlaylistSheet: Bool = false
+    @Published public var showingPlaylistSheet: Bool = false { didSet { pictureInPicture.update() } }
     
     /// Tab index for Source Sheet (0: Xtream Codes, 1: M3U Playlist)
     @Published public var sourceTab: Int = 0
@@ -358,8 +396,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var inputPlaylistURL: String = ""
     
     /// Controls whether the About modal is visible.
-    @Published public var showingAboutSheet: Bool = false
-    @Published var showingSubscriptionInfo = false
+    @Published public var showingAboutSheet: Bool = false { didSet { pictureInPicture.update() } }
+    @Published var showingSubscriptionInfo = false { didSet { pictureInPicture.update() } }
     
     /// Controls whether playback HUD overlays are shown over the video.
     @Published public var showVideoControls: Bool = true
@@ -376,6 +414,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var isFullscreen: Bool = false {
         didSet {
             if oldValue != isFullscreen {
+                pictureInPicture.update()
                 cancelControlsAutoHide()
                 if isFullscreen { scheduleControlsAutoHide() }
             }
@@ -459,17 +498,17 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var showingEpisodesDrawer: Bool = false
     
     /// Flag indicating if user is on the rich TV Series overview & episodes page.
-    @Published public var isViewingSeriesDetails: Bool = false
+    @Published public var isViewingSeriesDetails: Bool = false { didSet { pictureInPicture.update() } }
     @Published private(set) var seriesDetails: MediaDetails?
     @Published private(set) var seriesDetailsFailed = false
-    @Published private(set) var isViewingMovieDetails = false
+    @Published private(set) var isViewingMovieDetails = false { didSet { pictureInPicture.update() } }
     @Published private(set) var movieOverviewItem: M3UItem?
     
     /// Loading indicator for series episode resolution.
     @Published public var isLoadingEpisodes: Bool = false
     
     /// Live TV Electronic Program Guide (EPG) modal sheet visibility.
-    @Published public var showingEPGSheet: Bool = false
+    @Published public var showingEPGSheet: Bool = false { didSet { pictureInPicture.update() } }
     
     private var controlsTimer: Task<Void, Never>? = nil
     private var controlsInteractionHolds = Set<String>()
@@ -569,6 +608,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func observeProgress() {
+        pictureInPicture.manager = self
+        autoPictureInPicture = storageDefaults.object(forKey: "com.iptvplayer.autoPictureInPicture") as? Bool ?? true
+        pictureInPicture.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+
         librarySortOrder = LibrarySortOrder(rawValue: storageDefaults.string(forKey: "com.iptvplayer.librarySort") ?? "") ?? .provider
         favoritesOnly = storageDefaults.bool(forKey: "com.iptvplayer.favoritesOnly")
         recentlyAddedOnly = storageDefaults.bool(forKey: "com.iptvplayer.recentlyAddedOnly")
@@ -990,6 +1033,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     func playMovie(startOver: Bool = false) {
         guard let item = movieOverviewItem else { return }
+        if !startOver, currentChannel?.subtitleCacheKey == item.subtitleCacheKey,
+           player?.currentItem != nil || useVLCPlayback, !playbackFinished {
+            pictureInPicture.restorePlayer()
+            setPlaybackPlaying(true)
+            return
+        }
         if startOver { progressStore.clear(item) }
         continueWatching(item)
         showVideoControls = true
@@ -997,10 +1046,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     func returnToMovie() {
+        saveProgress(force: true)
         guard let item = movieOverviewItem ?? currentChannel, item.contentType == .movie else { return }
-        tearDownPlayback()
-        resumeRequest = nil
-        currentChannel = item
         movieOverviewItem = item
         isViewingMovieDetails = true
         showVideoControls = true
@@ -1259,10 +1306,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     /// Every route back to the episode browser uses the same engine-independent exit.
     public func returnToSeries() {
+        saveProgress(force: true)
         let overview = seriesOverviewItem ?? currentChannel
-        tearDownPlayback()
-        resumeRequest = nil
-        currentChannel = overview
+        seriesOverviewItem = overview
         isViewingSeriesDetails = true
         showingEpisodesDrawer = false
         showVideoControls = true
@@ -1289,6 +1335,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     /// Saves the actual engine clock before destroying its item and observers.
     private func tearDownPlayback(nextItem: M3UItem? = nil) {
+        pictureInPicture.resetPlayback()
         cancelStreamRecovery()
         audioTracks.reset()
         catchupOrigin = nil
@@ -1336,7 +1383,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         isBuffering = false
     }
 
-    func playerViewAppeared(_ identity: UUID) { visiblePlayerViews.insert(identity) }
+    func playerViewAppeared(_ identity: UUID) {
+        visiblePlayerViews.insert(identity)
+    }
 
     func playerViewDisappeared(_ identity: UUID) {
         visiblePlayerViews.remove(identity)
@@ -1345,6 +1394,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         Task { @MainActor [weak self] in
             await Task.yield()
             guard let self, self.visiblePlayerViews.isEmpty else { return }
+            self.pictureInPicture.reconcile()
+            guard !self.pictureInPicture.isActive, !self.pictureInPicture.isStarting else { return }
             self.stop()
         }
     }
@@ -1548,7 +1599,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     /// Toggles between play and pause.
     public func togglePlayPause() {
-        guard !isViewingSeriesDetails, resumeRequest == nil, pendingResumePosition == nil,
+        guard resumeRequest == nil, pendingResumePosition == nil,
               currentChannel != nil else { return }
         setPlaybackPlaying(recoveryTask == nil && !wantsPlayback)
     }

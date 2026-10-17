@@ -28,6 +28,7 @@ Bring your Xtream Codes account or M3U playlist, and make yourself at home.
 | 🍿 **TV series** | Explore seasons and episodes, track your progress, and jump back in with Continue watching. |
 | 💬 **Subtitles** | Choose embedded or provider tracks, import SRT/WebVTT files, and adjust text size while watching. |
 | ⏯ **Pick up where you left off** | Saved movie and episode progress, Resume or Start over, and watched indicators. |
+| ▣ **Picture in Picture** | Automatically float playback when another in-app screen covers the player, stay in PiP while browsing, and return manually without restarting. Works with AVKit and VLC on macOS. |
 | 🖥 **Native playback** | AVKit playback, an in-app VLC fallback on macOS, volume controls, and native macOS fullscreen. |
 | ◐ **Appearance** | Choose System, Light, or Dark from the sidebar's Appearance menu (or the macOS menu bar). Your choice is remembered and changes without restarting playback. |
 | ⬇ **Offline viewing** | Download movies, individual episodes, or a season. Manage the queue from Downloads and play saved media with the same subtitles and resume progress. |
@@ -45,6 +46,18 @@ sidebar to check your provider's expiry date and account status. Successful resu
 are saved locally and reused next time, including after restarting the app. Use
 **Refresh** inside the info sheet to check again; dates use your local time zone. Xtream Codes accounts and compatible M3U
 `get.php` links are supported; other playlists may not provide expiry information.
+
+**Auto Picture-in-Picture** is on by default. Toggle it in the Appearance toolbar menu
+or the macOS **Playback** menu. Opening details, Home, Downloads, or another in-app
+screen that covers the player moves a playing stream into PiP. Changing sections or
+categories while the player stays visible, switching apps, and minimizing do not trigger
+PiP; paused playback stays put. Use
+**Return to player** to return to the same stream. PiP stays active while switching
+sections or categories, even after the covering screen closes. Closing PiP or pressing Stop ends
+playback. The playback toolbar's PiP button works independently of the automatic setting.
+On macOS, both AVKit and VLC use the same resizable floating player, with playback
+controls and subtitle overlays. On iOS, native PiP availability depends on system and
+stream support; custom subtitle-file overlays remain in the main player.
 
 ## Start watching
 
@@ -103,7 +116,7 @@ returns to it. Pressing **Play** on a new item replaces the current stream.
 Leaving playback through **Back to Series Overview**, **All Episodes**, or closing
 the player saves progress and stops both playback engines.
 Progress is also saved every five seconds while playing. Hide the macOS app or
-background the iOS app to pause; resume manually when returning. Movies and episodes
+background the iOS app to pause; resume manually when returning. An existing PiP session can continue playing, but switching away never starts PiP automatically. Movies and episodes
 offer **Resume from mm:ss** or **Start over**. Episodes have progress indicators and
 a **Continue watching** shortcut. Items at least 95% watched or within the last 45
 seconds are treated as finished (short clips use the percentage threshold).

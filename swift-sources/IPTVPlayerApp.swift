@@ -176,6 +176,10 @@ struct IPTVPlayerApp: App {
             }
             // Media Playback menu in macOS top bar
             CommandMenu("Playback") {
+                Toggle("Auto Picture-in-Picture", isOn: $manager.autoPictureInPicture)
+                Button("Picture in Picture") { manager.pictureInPicture.toggle() }
+                    .disabled(!manager.pictureInPicture.isPossible)
+                Divider()
                 Button(manager.isPlaying ? "Pause" : "Play") {
                     manager.togglePlayPause()
                 }

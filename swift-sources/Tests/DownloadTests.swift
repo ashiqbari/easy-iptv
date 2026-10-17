@@ -290,7 +290,11 @@ final class DownloadTests: XCTestCase {
         try await wait { manager.subtitles.text == "Offline subtitle" }
         manager.subtitles.fontSize = 32
         XCTAssertEqual(manager.subtitles.fontSize, 32)
-        manager.returnToSeries(); XCTAssertNil(manager.player); XCTAssertFalse(manager.isPlaying)
+        let originalPlayer = try XCTUnwrap(manager.player)
+        manager.returnToSeries()
+        XCTAssertTrue(manager.player === originalPlayer)
+        XCTAssertNotNil(originalPlayer.currentItem)
+        XCTAssertTrue(manager.isViewingSeriesDetails)
         XCTAssertNotNil(manager.progressStore.progress(for: first)?.resumePosition)
         manager.playDownload(try XCTUnwrap(store.record(for: second)))
         manager.previousChannel()

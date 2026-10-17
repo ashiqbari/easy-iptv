@@ -364,6 +364,10 @@ final class SubtitleController: NSObject, ObservableObject {
         #endif
     }
 
+    func setNativePictureInPictureRendering(_ enabled: Bool) {
+        legibleOutput?.suppressesPlayerRendering = !enabled
+    }
+
     func clearForSeek() { text = "" }
 
     private func applyNativeFontSize() {

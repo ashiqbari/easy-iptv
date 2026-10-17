@@ -163,7 +163,7 @@ final class PlaybackProgressTests: XCTestCase {
         return condition()
     }
 
-    @MainActor func testExitSavesActualClockAndReleasesAVPlayer() async throws {
+    @MainActor func testStopSavesActualClockAndReleasesAVPlayer() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
@@ -178,7 +178,7 @@ final class PlaybackProgressTests: XCTestCase {
             player.seek(to: CMTime(seconds: 120, preferredTimescale: 600), toleranceBefore: .zero,
                         toleranceAfter: .zero) { _ in continuation.resume() }
         }
-        manager.returnToSeries()
+        manager.stop()
         XCTAssertNil(manager.player)
         XCTAssertNil(player.currentItem)
         XCTAssertEqual(player.rate, 0)
@@ -207,9 +207,12 @@ final class PlaybackProgressTests: XCTestCase {
         }
         manager.returnToMovie()
         XCTAssertTrue(manager.isViewingMovieDetails)
-        XCTAssertNil(player.currentItem)
+        XCTAssertTrue(manager.player === player)
+        XCTAssertNotNil(player.currentItem)
         XCTAssertEqual(manager.progressStore.progress(for: item)?.position ?? 0, 120, accuracy: 1)
         manager.playMovie()
+        XCTAssertTrue(manager.player === player)
+        XCTAssertFalse(manager.isViewingMovieDetails)
         let resumed = await waitUntil { (manager.player?.currentTime().seconds ?? 0) >= 119 }
         XCTAssertTrue(resumed)
         XCTAssertNil(manager.resumeRequest)
@@ -302,7 +305,7 @@ final class PlaybackProgressTests: XCTestCase {
         manager.stop()
     }
 
-    @MainActor func testExitDuringPendingResumeKeepsSavedPosition() async throws {
+    @MainActor func testStopDuringPendingResumeKeepsSavedPosition() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
@@ -310,7 +313,7 @@ final class PlaybackProgressTests: XCTestCase {
         manager.progressStore.save(item: item, position: 120, duration: 300)
         manager.playDirectStream(item)
         manager.resolveResume(try XCTUnwrap(manager.resumeRequest), startOver: false)
-        manager.returnToSeries()
+        manager.stop()
         try await Task.sleep(nanoseconds: 100_000_000)
         XCTAssertNil(manager.player)
         XCTAssertEqual(manager.progressStore.progress(for: item)?.resumePosition, 120)
@@ -348,14 +351,14 @@ final class PlaybackProgressTests: XCTestCase {
         XCTAssertNotNil(manager.player)
     }
 
-    @MainActor func testVLCExitReleasesActivePlayerAndCannotRestartFromSeries() async throws {
+    @MainActor func testVLCStopReleasesActivePlayerAndCannotRestart() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
         manager.playDirectStream(media(url: url))
         manager.playCurrentStreamWithVLC()
         XCTAssertNotNil(manager.vlcPlayer)
-        manager.returnToSeries()
+        manager.stop()
         XCTAssertNil(manager.vlcPlayer)
         XCTAssertFalse(manager.useVLCPlayback)
         manager.playCurrentStreamWithVLC()
@@ -364,7 +367,7 @@ final class PlaybackProgressTests: XCTestCase {
         XCTAssertFalse(manager.isPlaying)
     }
 
-    @MainActor func testVLCResumeAndExitSaveRealClock() async throws {
+    @MainActor func testVLCResumeAndStopSaveRealClock() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
         let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
@@ -379,7 +382,7 @@ final class PlaybackProgressTests: XCTestCase {
         vlc.play()
         let resumed = await waitUntil { vlc.time.intValue >= 119_000 && vlc.audio?.volume != 0 }
         XCTAssertTrue(resumed)
-        manager.returnToSeries()
+        manager.stop()
         XCTAssertNil(manager.vlcPlayer)
         XCTAssertEqual(manager.progressStore.progress(for: item)?.position ?? 0, 120, accuracy: 3)
         let stopped = await waitUntil { vlc.state == .stopped }

@@ -242,7 +242,7 @@ public struct IPTVPlaybackView: View {
                         VLCVideoSurface(
                             player: player,
                             shouldPlay: manager.isPlaying || manager.isBuffering,
-                            screenSize: manager.screenSize
+                            screenSize: manager.screenSize, pictureInPicture: manager.pictureInPicture
                         )
                             .ignoresSafeArea()
                             .overlay {
@@ -253,7 +253,7 @@ public struct IPTVPlaybackView: View {
                             }
                         SubtitleOverlay(controller: manager.subtitles, controlsVisible: manager.showVideoControls)
                         if manager.isBuffering { bufferingOverlay }
-                        if manager.showVideoControls { controlsOverlay }
+                        if manager.showVideoControls && !manager.pictureInPicture.isActive { controlsOverlay }
                         if manager.showingEpisodesDrawer && manager.currentChannel?.contentType == .series && !manager.seriesEpisodes.isEmpty {
                             EpisodePlaybackPanel(manager: manager)
                         }
@@ -270,6 +270,16 @@ public struct IPTVPlaybackView: View {
             .opacity(manager.isViewingMovieDetails || manager.isViewingSeriesDetails ? 0 : 1)
             .allowsHitTesting(!manager.isViewingMovieDetails && !manager.isViewingSeriesDetails)
             .accessibilityHidden(manager.isViewingMovieDetails || manager.isViewingSeriesDetails)
+
+            if manager.pictureInPicture.isActive, !manager.isViewingMovieDetails, !manager.isViewingSeriesDetails {
+                VStack(spacing: 12) {
+                    Image(systemName: "pip.fill").font(.largeTitle)
+                    Text("Playing in PiP")
+                    Button("Return to player") { manager.pictureInPicture.restorePlayer() }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(palette.playbackBackground)
+            }
 
             if !manager.isViewingMovieDetails, !manager.isViewingSeriesDetails,
                manager.player != nil || manager.useVLCPlayback, let message = manager.errorMessage {
@@ -330,7 +340,7 @@ public struct IPTVPlaybackView: View {
     private var avPlaybackContent: some View {
         if let player = manager.player {
                 // Direct AVPlayerLayer rendering via explicit platform representable
-                AVPlayerLayerRepresentable(player: player, videoGravity: manager.videoGravity, screenSize: manager.screenSize)
+                AVPlayerLayerRepresentable(player: player, videoGravity: manager.videoGravity, screenSize: manager.screenSize, pictureInPicture: manager.pictureInPicture)
                     .ignoresSafeArea()
                     .overlay(
                         Color.clear
@@ -351,7 +361,7 @@ public struct IPTVPlaybackView: View {
                 }
                 
                 // HUD Controls Overlay
-                if manager.showVideoControls {
+                if manager.showVideoControls && !manager.pictureInPicture.isActive {
                     controlsOverlay
                         .transition(.opacity.animation(.easeInOut(duration: 0.25)))
                 }
@@ -687,10 +697,16 @@ public struct IPTVPlaybackView: View {
                         aspectRatioControl
                         Spacer(minLength: 0)
                     }
-                    HStack(spacing: 4) {
-                        volumeControls
-                        Spacer(minLength: 0)
-                        playbackActions.labelStyle(.iconOnly)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 4) {
+                            volumeControls
+                            Spacer(minLength: 0)
+                            playbackActions.labelStyle(.iconOnly)
+                        }
+                        VStack(spacing: 8) {
+                            HStack { volumeControls; Spacer(minLength: 0) }
+                            HStack { Spacer(minLength: 0); playbackActions.labelStyle(.iconOnly) }
+                        }
                     }
                 }
             }
@@ -789,6 +805,19 @@ public struct IPTVPlaybackView: View {
 
     @ViewBuilder
     private var playbackActions: some View {
+        Button { manager.pictureInPicture.toggle() } label: {
+            Label("PiP", systemImage: "pip.enter")
+                .font(.caption.bold())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.2), in: RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+        .disabled(!manager.pictureInPicture.isPossible)
+        .accessibilityLabel("Picture in Picture")
+        .help(manager.pictureInPicture.failureMessage ?? "Picture in Picture")
+
         // Full Screen Toggle Button
         Button {
             manager.toggleFullscreen()
@@ -1756,7 +1785,7 @@ import AppKit
 /// Eliminates SwiftUI's internal _AVKit_SwiftUI dynamic metadata resolution crash on macOS
 /// and provides 60fps hardware-accelerated video presentation via Metal / CoreAnimation.
 public final class AVPlayerLayerNSView: NSView {
-    private let playerLayer = AVPlayerLayer()
+    public let playerLayer = AVPlayerLayer()
     private var screenSize: VideoScreenSize = .auto
     
     public init(player: AVPlayer?, videoGravity: AVLayerVideoGravity = .resizeAspect) {
@@ -1802,6 +1831,7 @@ public struct AVPlayerLayerRepresentable: NSViewRepresentable {
     public let player: AVPlayer
     public var videoGravity: AVLayerVideoGravity
     public var screenSize: VideoScreenSize
+    var pictureInPicture: PictureInPictureCoordinator?
     
     public init(player: AVPlayer, videoGravity: AVLayerVideoGravity = .resizeAspect, screenSize: VideoScreenSize = .auto) {
         self.player = player
@@ -1809,14 +1839,23 @@ public struct AVPlayerLayerRepresentable: NSViewRepresentable {
         self.screenSize = screenSize
     }
     
-    public func makeNSView(context: Context) -> AVPlayerLayerNSView {
-        let view = AVPlayerLayerNSView(player: player, videoGravity: videoGravity)
-        view.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
-        return view
+    init(player: AVPlayer, videoGravity: AVLayerVideoGravity, screenSize: VideoScreenSize, pictureInPicture: PictureInPictureCoordinator) {
+        self.init(player: player, videoGravity: videoGravity, screenSize: screenSize)
+        self.pictureInPicture = pictureInPicture
     }
-    
-    public func updateNSView(_ nsView: AVPlayerLayerNSView, context: Context) {
-        nsView.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
+
+    public func makeNSView(context: Context) -> NSView {
+        let surface = AVPlayerLayerNSView(player: player, videoGravity: videoGravity)
+        let container = PictureInPictureVideoContainer(surface: surface)
+        updateNSView(container, context: context)
+        return container
+    }
+
+    public func updateNSView(_ nsView: NSView, context: Context) {
+        guard let container = nsView as? PictureInPictureVideoContainer,
+              let surface = container.surface as? AVPlayerLayerNSView else { return }
+        surface.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
+        pictureInPicture?.attachSurface(surface, home: container)
     }
 }
 
@@ -1924,20 +1963,31 @@ private struct VLCVideoSurface: NSViewRepresentable {
     let player: VLCMediaPlayer
     let shouldPlay: Bool
     let screenSize: VideoScreenSize
+    let pictureInPicture: PictureInPictureCoordinator
 
-    func makeNSView(context: Context) -> VLCVideoSurfaceNSView {
-        let view = VLCVideoSurfaceNSView()
-        view.update(player: player, shouldPlay: shouldPlay, screenSize: screenSize)
-        return view
+    func makeNSView(context: Context) -> PictureInPictureVideoContainer {
+        let container = PictureInPictureVideoContainer(surface: VLCVideoSurfaceNSView())
+        updateNSView(container, context: context)
+        return container
     }
 
-    func updateNSView(_ nsView: VLCVideoSurfaceNSView, context: Context) {
-        nsView.update(player: player, shouldPlay: shouldPlay, screenSize: screenSize)
+    func updateNSView(_ container: PictureInPictureVideoContainer, context: Context) {
+        guard let surface = container.surface as? VLCVideoSurfaceNSView else { return }
+        surface.update(player: player, shouldPlay: shouldPlay, screenSize: screenSize)
+        pictureInPicture.attachSurface(surface, home: container)
     }
+}
 
-    static func dismantleNSView(_ nsView: VLCVideoSurfaceNSView, coordinator: ()) {
-        // The manager owns and stops the VLC player when changing playback engines.
+private final class PictureInPictureVideoContainer: NSView {
+    let surface: NSView
+    init(surface: NSView) {
+        self.surface = surface
+        super.init(frame: .zero)
+        surface.frame = bounds
+        surface.autoresizingMask = [.width, .height]
+        addSubview(surface)
     }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 }
 #elseif os(iOS)
 import UIKit
@@ -1988,6 +2038,7 @@ public struct AVPlayerLayerRepresentable: UIViewRepresentable {
     public let player: AVPlayer
     public var videoGravity: AVLayerVideoGravity
     public var screenSize: VideoScreenSize
+    var pictureInPicture: PictureInPictureCoordinator?
     
     public init(player: AVPlayer, videoGravity: AVLayerVideoGravity = .resizeAspect, screenSize: VideoScreenSize = .auto) {
         self.player = player
@@ -1995,14 +2046,21 @@ public struct AVPlayerLayerRepresentable: UIViewRepresentable {
         self.screenSize = screenSize
     }
     
+    init(player: AVPlayer, videoGravity: AVLayerVideoGravity, screenSize: VideoScreenSize, pictureInPicture: PictureInPictureCoordinator) {
+        self.init(player: player, videoGravity: videoGravity, screenSize: screenSize)
+        self.pictureInPicture = pictureInPicture
+    }
+
     public func makeUIView(context: Context) -> AVPlayerLayerUIView {
         let view = AVPlayerLayerUIView(player: player, videoGravity: videoGravity)
         view.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
+        pictureInPicture?.attach(view.playerLayer)
         return view
     }
     
     public func updateUIView(_ uiView: AVPlayerLayerUIView, context: Context) {
         uiView.update(player: player, videoGravity: videoGravity, screenSize: screenSize)
+        pictureInPicture?.attach(uiView.playerLayer)
     }
 }
 #endif

@@ -221,6 +221,8 @@ final class LifecycleTests: XCTestCase {
             }
         }
         func surface(in view: NSView) -> NSView? {
+            if view === hosting, let floating = manager.pictureInPicture.floatingWindow?.contentView,
+               let surface = surface(in: floating) { return surface }
             if useVLC { return manager.vlcPlayer?.drawable as? NSView }
             if view is AVPlayerLayerNSView { return view }
             return view.subviews.lazy.compactMap { surface(in: $0) }.first
