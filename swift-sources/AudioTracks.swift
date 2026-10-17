@@ -97,9 +97,16 @@ struct AudioTrackControl: View {
     @ObservedObject var controller: AudioTrackController
     var body: some View {
         Button { controller.showingMenu.toggle(); if controller.showingMenu { controller.refresh() } } label: {
-            Image(systemName: "waveform")
-                .font(.title3).foregroundStyle(.white).frame(width: 44, height: 44)
+            Label("Audio", systemImage: "waveform")
+                .font(.caption.bold())
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
                 .background(.white.opacity(0.2), in: RoundedRectangle(cornerRadius: 6))
+                #if os(iOS)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                #endif
         }
         .buttonStyle(.plain).accessibilityLabel("Audio tracks").help("Choose audio language or track")
         .popover(isPresented: $controller.showingMenu) { AudioTrackMenu(controller: controller) }

@@ -44,11 +44,16 @@ struct SubtitleControls: View {
                 controller.loadTracksIfNeeded()
             }
         } label: {
-            Image(systemName: controller.selectedID == nil ? "captions.bubble" : "captions.bubble.fill")
-                .font(.title3)
+            Label("Subtitles", systemImage: controller.selectedID == nil ? "captions.bubble" : "captions.bubble.fill")
+                .font(.caption.bold())
                 .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
                 .background(Color.white.opacity(0.2), in: RoundedRectangle(cornerRadius: 6))
+                #if os(iOS)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                #endif
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Subtitles (CC)")
@@ -104,6 +109,7 @@ struct SubtitleMenuView: View {
         // A popover needs concrete bounds. A flexible empty ScrollView combined
         // with idealWidth/fixedSize can collapse its hosted content after loading.
         .frame(width: 320, height: 440)
+        .labelStyle(.titleAndIcon)
         .foregroundStyle(.primary)
         .background(.regularMaterial)
     }

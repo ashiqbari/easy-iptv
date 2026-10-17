@@ -684,7 +684,7 @@ public struct IPTVPlaybackView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     streamStatus
                     HStack {
-                        episodeAndSubtitleControls
+                        episodeAndSubtitleControls.labelStyle(.iconOnly)
                         aspectRatioControl
                         Spacer(minLength: 0)
                     }
@@ -730,10 +730,7 @@ public struct IPTVPlaybackView: View {
             Button {
                 manager.showingEpisodesDrawer.toggle()
             } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "list.number")
-                    Text("Episodes (\(manager.filteredEpisodesForSelectedSeason.count))")
-                }
+                Label("Episodes (\(manager.filteredEpisodesForSelectedSeason.count))", systemImage: "list.number")
                 .font(.caption.bold())
                 .foregroundColor(.white)
                 .padding(.horizontal, 10)
