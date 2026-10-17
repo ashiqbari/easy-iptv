@@ -8,6 +8,7 @@
 import Foundation
 import AVFoundation
 import Combine
+import MediaPlayer
 import SwiftUI
 #if os(macOS)
 import VLC
@@ -137,6 +138,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     private var vlcResumeSeekIssued = false
     private var resumeTimeoutTask: Task<Void, Never>?
     private var wantsPlayback = false
+    private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
     private var playbackFinished = false
     private var lastProgressSave = Date.distantPast
     private var playbackEndObserver: NSObjectProtocol?
@@ -293,6 +295,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                 disableDisplaySleepPrevention()
             }
             #endif
+            updateRemoteNowPlaying()
             if oldValue != isPlaying {
                 notePlayerActivity()
                 if isPlaying { markStablePlayback() }
@@ -385,7 +388,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     /// Total duration in seconds for VOD media.
-    @Published public var duration: Double = 0.0
+    @Published public var duration: Double = 0.0 {
+        didSet { if duration != oldValue { updateRemoteNowPlaying() } }
+    }
     
     /// Flag indicating if the user is actively dragging the seek slider.
     @Published public var isSeeking: Bool = false
@@ -543,6 +548,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         observeProgress()
         loadPersistedState()
         setupAudioSessionIfAvailable()
+        configureRemotePlaybackControls()
         migrateActiveSource()
     }
 
@@ -582,6 +588,16 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     
     deinit {
+        for (command, target) in remoteCommandTargets {
+            command.removeTarget(target)
+            command.isEnabled = false
+        }
+        if !remoteCommandTargets.isEmpty {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            #if os(macOS)
+            MPNowPlayingInfoCenter.default().playbackState = .stopped
+            #endif
+        }
         libraryFilterTask?.cancel()
         recoveryTask?.cancel()
         stallTask?.cancel()
@@ -1441,6 +1457,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         guard seconds.isFinite, pendingResumePosition == nil, !isViewingSeriesDetails else { return }
         playbackFinished = false
         subtitles.clearForSeek()
+        defer { updateRemoteNowPlaying() }
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer {
             vlcPlayer.time = VLCTime(int: Int32(max(0, min(seconds * 1000, Double(Int32.max)))))
@@ -1533,39 +1550,28 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func togglePlayPause() {
         guard !isViewingSeriesDetails, resumeRequest == nil, pendingResumePosition == nil,
               currentChannel != nil else { return }
-        let wasReconnecting = recoveryTask != nil
-        cancelStreamRecovery()
-        wantsPlayback = wasReconnecting ? false : !isPlaying
-        if wantsPlayback { playbackFinished = false }
-        if !wantsPlayback { saveProgress(force: true) }
-        if wasReconnecting {
-            player?.pause()
-            #if os(macOS)
-            vlcPlayer?.pause()
-            #endif
-            isPlaying = false; isBuffering = false
+        setPlaybackPlaying(recoveryTask == nil && !wantsPlayback)
+    }
+
+    private func setPlaybackPlaying(_ playing: Bool) {
+        if !playing {
+            pauseForBackground()
             return
         }
+        cancelStreamRecovery()
+        wantsPlayback = true
+        playbackFinished = false
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer {
-            if isPlaying {
-                vlcPlayer.pause()
-            } else {
-                vlcPlayer.play()
-            }
+            vlcPlayer.play()
             return
         }
         #endif
-        guard let player = self.player else { return }
-        if isPlaying {
-            player.pause()
-            self.isPlaying = false
-        } else {
-            player.play()
-            self.isPlaying = true
-        }
+        guard let player else { return }
+        player.play()
+        isPlaying = true
     }
-    
+
     /// Stops playback and releases the current player item.
     public func stop() {
         seriesLoadTask?.cancel()
@@ -2153,12 +2159,84 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
         guard let player = notification.object as? VLCMediaPlayer else { return }
         let current = Double(player.time.intValue) / 1000
         let total = Double(player.media?.length.intValue ?? 0) / 1000
+        let playing = player.isPlaying
         Task { @MainActor [weak self] in
             guard let self, self.vlcPlayer === player, !self.isSeeking else { return }
             self.updatePlaybackClock(position: current, duration: total)
+            // VLC can resume its clock while its last state notification still says buffering.
+            self.updatePlaybackState(playing: self.wantsPlayback && playing,
+                                     buffering: self.wantsPlayback && !playing && self.isBuffering)
             self.applyPendingVLCResume(player)
             self.saveProgress()
         }
     }
 }
 #endif
+
+// MARK: - Headset and system media controls
+
+extension IPTVPlayerManager {
+    enum RemotePlaybackAction { case play, pause, toggle }
+
+    func configureRemotePlaybackControls() {
+        guard remoteCommandTargets.isEmpty else { return }
+        let center = MPRemoteCommandCenter.shared()
+        for (command, action) in [(center.playCommand, RemotePlaybackAction.play),
+                                  (center.pauseCommand, .pause), (center.togglePlayPauseCommand, .toggle)] {
+            let target = command.addTarget { [weak self] _ in
+                // Accessories may deliver events off the UI thread.
+                if Thread.isMainThread {
+                    return MainActor.assumeIsolated { self?.handleRemotePlayback(action) ?? .noSuchContent }
+                }
+                return DispatchQueue.main.sync {
+                    MainActor.assumeIsolated { self?.handleRemotePlayback(action) ?? .noSuchContent }
+                }
+            }
+            remoteCommandTargets.append((command, target))
+        }
+        updateRemoteNowPlaying()
+    }
+
+    @discardableResult
+    func handleRemotePlayback(_ action: RemotePlaybackAction) -> MPRemoteCommandHandlerStatus {
+        guard currentChannel != nil, player != nil || useVLCPlayback, resumeRequest == nil else { return .noSuchContent }
+        if pendingResumePosition != nil { return .commandFailed }
+        let shouldPlay: Bool
+        switch action {
+        case .play: shouldPlay = true
+        case .pause: shouldPlay = false
+        case .toggle: shouldPlay = !wantsPlayback
+        }
+        if shouldPlay != wantsPlayback { setPlaybackPlaying(shouldPlay) }
+        return .success
+    }
+
+    private func updateRemoteNowPlaying() {
+        guard !remoteCommandTargets.isEmpty else { return }
+        let active = currentChannel != nil && (player != nil || useVLCPlayback)
+        for (command, _) in remoteCommandTargets { command.isEnabled = active }
+        let center = MPNowPlayingInfoCenter.default()
+        guard active, let item = currentChannel else {
+            center.nowPlayingInfo = nil
+            #if os(macOS)
+            center.playbackState = .stopped
+            #endif
+            return
+        }
+        var info: [String: Any] = [
+            MPMediaItemPropertyTitle: item.playbackTitle,
+            MPMediaItemPropertyArtist: item.contentType == .series ? (playingSeries?.item?.name ?? item.displayGroup) : item.displayGroup,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.video.rawValue,
+            MPNowPlayingInfoPropertyIsLiveStream: item.contentType == .live && item.isCatchup != true,
+            MPNowPlayingInfoPropertyPlaybackRate: isPlaying ? 1.0 : 0.0
+        ]
+        if item.isVOD {
+            if currentTime.isFinite { info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = max(0, currentTime) }
+            if duration.isFinite, duration > 0 { info[MPMediaItemPropertyPlaybackDuration] = duration }
+        }
+        center.nowPlayingInfo = info
+        #if os(macOS)
+        center.playbackState = isPlaying ? .playing : .paused
+        #endif
+    }
+}

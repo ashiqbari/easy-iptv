@@ -60,6 +60,7 @@ let package = Package(
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
                 .linkedFramework("AVFoundation"),
+                .linkedFramework("MediaPlayer"),
                 .linkedFramework("QuartzCore"),
                 .linkedFramework("AppKit", .when(platforms: [.macOS])),
                 .linkedFramework("IOKit", .when(platforms: [.macOS]))

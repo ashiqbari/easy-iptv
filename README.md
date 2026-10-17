@@ -108,6 +108,13 @@ offer **Resume from mm:ss** or **Start over**. Episodes have progress indicators
 a **Continue watching** shortcut. Items at least 95% watched or within the last 45
 seconds are treated as finished (short clips use the percentage threshold).
 
+Headset play/pause buttons and system media controls use Apple's Now Playing
+support with both AVKit and VLC. The system shows the current title and playback
+state, and controls are released when playback stops. These controls also work
+while browsing details over a playing stream; they don't start a new episode or
+bypass a Resume/Start over prompt. Headsets must expose standard media commands
+to the operating system.
+
 Fullscreen controls hide after 2.5 seconds of inactivity even when another window
 or app has focus. Moving the pointer over the player reveals them; hovering controls,
 open menus/dialogs, and paused playback keep them visible. The cursor is hidden only
