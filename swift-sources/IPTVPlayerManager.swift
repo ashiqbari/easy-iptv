@@ -81,8 +81,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     var isPlayerDestinationVisible: Bool {
         (!showingDashboard || isFullscreen) && !isViewingMovieDetails && !isViewingSeriesDetails
-            && !showingGuideSearch && !showingDownloads && !showingSources && !showingOrganization && !showingPlaylistSheet
-            && !showingAboutSheet && !showingSubscriptionInfo && !showingEPGSheet && catchupChannel == nil
+            && !showingAboutSheet && !showingSubscriptionInfo && catchupChannel == nil
     }
     var canPresentPictureInPicture: Bool {
         currentChannel != nil && (player?.currentItem != nil || useVLCPlayback)

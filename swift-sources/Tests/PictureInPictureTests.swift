@@ -23,9 +23,8 @@ final class PictureInPictureTests: XCTestCase {
         let manager = IPTVPlayerManager(progressDefaults: defaults)
         manager.showingDashboard = false
         XCTAssertTrue(manager.isPlayerDestinationVisible)
-        for screen in [\IPTVPlayerManager.showingDownloads, \.showingSources, \.showingOrganization,
-                       \.showingPlaylistSheet, \.showingAboutSheet, \.showingSubscriptionInfo,
-                       \.showingGuideSearch, \.showingEPGSheet, \.isViewingSeriesDetails] {
+        for screen in [\IPTVPlayerManager.showingAboutSheet, \.showingSubscriptionInfo,
+                       \.isViewingSeriesDetails] {
             manager[keyPath: screen] = true
             XCTAssertFalse(manager.isPlayerDestinationVisible)
             manager[keyPath: screen] = false
@@ -40,6 +39,38 @@ final class PictureInPictureTests: XCTestCase {
     }
 
     #if os(macOS)
+    @MainActor func testUtilityScreensDoNotStartPiPOrInterruptPlayback() async throws {
+        for contentType in [M3UItem.ContentType.live, .movie] {
+            let fixture = try await PiPFixture(contentType: contentType)
+            defer { fixture.cleanUp() }
+            let manager = fixture.manager
+            let player = manager.player
+            let vlcPlayer = manager.vlcPlayer
+            let pip = manager.pictureInPicture
+            for screen in [\IPTVPlayerManager.showingSources, \.showingPlaylistSheet, \.showingOrganization, \.showingGuideSearch,
+                           \.showingDownloads, \.showingEPGSheet] {
+                manager[keyPath: screen] = true
+                for _ in 0..<5 { try await Task.sleep(nanoseconds: 10_000_000) }
+                pip.reconcile()
+                XCTAssertTrue(manager.isPlayerDestinationVisible)
+                XCTAssertFalse(pip.isActive, "Utility screens must not start PiP")
+                XCTAssertTrue(manager.isPlaying)
+                XCTAssertTrue(manager.player === player)
+                XCTAssertTrue(manager.vlcPlayer === vlcPlayer)
+                manager[keyPath: screen] = false
+            }
+            pip.toggle()
+            XCTAssertTrue(pip.isActive, "Manual PiP must still work")
+            for screen in [\IPTVPlayerManager.showingSources, \.showingPlaylistSheet, \.showingOrganization, \.showingGuideSearch,
+                           \.showingDownloads, \.showingEPGSheet] {
+                manager[keyPath: screen] = true
+                pip.reconcile()
+                XCTAssertTrue(pip.isActive, "Utility screens must preserve existing PiP")
+                manager[keyPath: screen] = false
+            }
+        }
+    }
+
     @MainActor func testVLCNavigationMovesSameDrawableAndReturnKeepsClock() async throws {
         let fixture = try await PiPFixture()
         defer { fixture.cleanUp() }
@@ -158,13 +189,13 @@ final class PictureInPictureTests: XCTestCase {
             XCTAssertFalse(pip.isActive, "External focus/window changes must not trigger PiP")
         }
         XCTAssertTrue(fixture.manager.isPlaying)
-        fixture.manager.showingDownloads = true
+        fixture.manager.showingAboutSheet = true
         pip.reconcile()
         XCTAssertTrue(pip.isActive)
-        fixture.manager.showingDownloads = false
+        fixture.manager.showingAboutSheet = false
         pip.reconcile()
         XCTAssertTrue(pip.isActive, "Closing a covering screen must not leave PiP")
-        fixture.manager.showingDownloads = true
+        fixture.manager.showingAboutSheet = true
         pip.reconcile()
         XCTAssertTrue(pip.isActive)
         fixture.manager.autoPictureInPicture = false
