@@ -6,6 +6,16 @@ import AppKit
 @testable import EasyIPTV
 
 final class MovieDetailsTests: XCTestCase {
+    func testRatingsDisplayRoundedToOneDecimalPlace() {
+        var details = MediaDetails()
+        XCTAssertNil(details.formattedRating)
+        for (raw, expected) in [("7.141", "7.1"), ("7.15", "7.2"), ("8.5", "8.5"), ("8", "8.0"), ("9.99", "10.0")] {
+            details.rating = raw
+            XCTAssertEqual(details.formattedRating, expected, raw)
+            XCTAssertEqual(details.rating, raw)
+        }
+    }
+
     func testProviderMetadataAndRecommendations() throws {
         let details = try MediaDetails.parse(Data("""
         {"info":{"name":"A Movie","movie_image":"https://fixture.invalid/poster.jpg",

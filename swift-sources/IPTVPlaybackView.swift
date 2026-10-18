@@ -459,7 +459,7 @@ public struct IPTVPlaybackView: View {
                     .help("Return to movie details")
                 }
                 // Return to TV Series Overview Button
-                if channel.contentType == .series || manager.selectedSection == .series {
+                if channel.contentType == .series {
                     Button {
                         manager.returnToSeries()
                     } label: {

@@ -12,6 +12,10 @@ struct MediaDetails: Codable, Sendable {
     var year: String?
     var runtime: String?
     var rating: String?
+    var formattedRating: String? {
+        guard let rating, let value = Double(rating), value.isFinite else { return rating }
+        return String(format: "%.1f", (value * 10).rounded() / 10)
+    }
     var certification: String?
     var genres: String?
     var plot: String?
@@ -222,7 +226,7 @@ struct MediaMetadataView: View {
             let metadata = [details?.year, details?.runtime, details?.certification].compactMap { $0 }
             if !metadata.isEmpty { Text(metadata.joined(separator: " • ")).font(.subheadline).foregroundStyle(.secondary) }
             if let genres = details?.genres { Text(genres).font(.subheadline) }
-            if let rating = details?.rating {
+            if let rating = details?.formattedRating {
                 HStack(spacing: 4) {
                     Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow)
                     Text(rating).font(.caption.bold()).foregroundStyle(.primary)
