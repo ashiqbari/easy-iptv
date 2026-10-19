@@ -69,7 +69,7 @@ struct DashboardView: View {
             }
         }
         .background(background)
-        .tint(palette.controlAccent)
+        .tint(palette.controlTint)
         .navigationTitle("Home")
     }
 

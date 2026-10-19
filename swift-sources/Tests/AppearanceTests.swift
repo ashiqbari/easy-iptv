@@ -14,6 +14,7 @@ final class AppearanceTests: XCTestCase {
             let explicit = AppPalette(appearance: scheme == .dark ? .dark : .light)
             XCTAssertEqual(system.accent, explicit.accent)
             XCTAssertEqual(system.controlAccent, explicit.controlAccent)
+            XCTAssertEqual(system.controlTint, explicit.controlTint)
             XCTAssertEqual(system.onAccent, explicit.onAccent)
             for theme in AppearancePreference.allCases where theme != .system {
                 XCTAssertEqual(AppPalette(appearance: theme, colorScheme: scheme).appearance, theme)
@@ -53,6 +54,19 @@ final class AppearanceTests: XCTestCase {
     }
 
     #if os(macOS)
+    func testDarkPaletteUsesNeutralSurfacesAndAccents() throws {
+        for palette in [AppPalette(appearance: .dark), AppPalette(appearance: .system, colorScheme: .dark)] {
+            XCTAssertTrue(palette.isCustom, "Dark surfaces must override native material tinting")
+            XCTAssertEqual(palette.controlTint, .white)
+            XCTAssertEqual(palette.playbackBackground, .black)
+            for color in [palette.background, palette.surface, palette.accent, palette.controlAccent] {
+                let rgb = try XCTUnwrap(NSColor(color).usingColorSpace(.sRGB))
+                XCTAssertEqual(rgb.redComponent, rgb.greenComponent, accuracy: 0.001)
+                XCTAssertEqual(rgb.greenComponent, rgb.blueComponent, accuracy: 0.001)
+            }
+        }
+    }
+
     func testCustomThemeTextContrast() throws {
         func luminance(_ color: Color) throws -> Double {
             var resolved: NSColor?
@@ -76,6 +90,10 @@ final class AppearanceTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(try contrast(text, palette.surface), 4.5)
             XCTAssertGreaterThanOrEqual(try contrast(palette.onAccent, palette.accent), 4.5)
             XCTAssertGreaterThanOrEqual(try contrast(.white, palette.controlAccent), 4.5)
+            if theme == .dark {
+                XCTAssertGreaterThanOrEqual(try contrast(palette.controlTint, palette.background), 4.5)
+                XCTAssertGreaterThanOrEqual(try contrast(palette.controlTint, palette.surface), 4.5)
+            }
         }
     }
 
@@ -142,6 +160,12 @@ final class AppearanceTests: XCTestCase {
             }
             return view.subviews.lazy.compactMap { aspectTint(in: $0) }.first
         }
+        func playerMenus(in view: NSView) -> [NSPopUpButton] {
+            if let button = view as? NSPopUpButton, ["Auto", "Player"].contains(button.accessibilityLabel() ?? "") {
+                return [button]
+            }
+            return view.subviews.flatMap { playerMenus(in: $0) }
+        }
         try await settle()
         let original = try XCTUnwrap(surface(in: hosting))
         for option in [AppearancePreference.light, .navy, .obsidian, .forest, .warmStone, .system, .dark, .light, .system] {
@@ -161,8 +185,16 @@ final class AppearanceTests: XCTestCase {
         try await settle()
         XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua, "System follows macOS appearance changes")
         XCTAssertEqual(probe.colorScheme, .dark)
-        let darkTint = try XCTUnwrap(aspectTint(in: hosting))
-        XCTAssertGreaterThan(darkTint.redComponent, darkTint.blueComponent, "System dark must use the warm accent")
+        let menus = playerMenus(in: hosting)
+        XCTAssertEqual(menus.count, 2)
+        for button in menus {
+            XCTAssertTrue(button.isEnabled)
+            let tint = try XCTUnwrap(button.contentTintColor?.usingColorSpace(.sRGB))
+            for component in [tint.redComponent, tint.greenComponent, tint.blueComponent] {
+                XCTAssertEqual(component, 1, accuracy: 0.01,
+                               "Enabled \(button.accessibilityLabel() ?? "") must be white in System dark")
+            }
+        }
         application.appearance = NSAppearance(named: .aqua)
         try await settle()
         XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)

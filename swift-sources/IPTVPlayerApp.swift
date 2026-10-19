@@ -36,10 +36,11 @@ struct AppPalette {
     init(appearance: AppearancePreference = .system, colorScheme: ColorScheme = .light) {
         self.appearance = appearance == .system ? (colorScheme == .dark ? .dark : .light) : appearance
     }
-    var isCustom: Bool { [.navy, .obsidian, .forest, .warmStone].contains(appearance) }
+    var isCustom: Bool { [.dark, .navy, .obsidian, .forest, .warmStone].contains(appearance) }
     var onAccent: Color { [.dark, .navy, .obsidian, .forest].contains(appearance) ? .black : .white }
     var background: Color {
         switch appearance {
+        case .dark: return Color(white: 0.10)
         case .navy: return Color(red: 0.035, green: 0.06, blue: 0.12)
         case .obsidian: return Color(red: 21/255, green: 21/255, blue: 25/255)
         case .forest: return Color(red: 16/255, green: 35/255, blue: 30/255)
@@ -54,6 +55,7 @@ struct AppPalette {
     }
     var surface: Color {
         switch appearance {
+        case .dark: return Color(white: 0.14)
         case .navy: return Color(red: 0.075, green: 0.11, blue: 0.18)
         case .obsidian: return Color(red: 34/255, green: 33/255, blue: 42/255)
         case .forest: return Color(red: 25/255, green: 51/255, blue: 43/255)
@@ -66,10 +68,11 @@ struct AppPalette {
         return Color(uiColor: .secondarySystemBackground)
         #endif
     }
-    var playbackBackground: Color { isCustom && appearance.colorScheme == .dark ? background : .black }
+    var playbackBackground: Color { [.navy, .obsidian, .forest].contains(appearance) ? background : .black }
+    var controlTint: Color { appearance == .dark ? .white : controlAccent }
     var controlAccent: Color {
         switch appearance {
-        case .dark: return Color(red: 98/255, green: 95/255, blue: 89/255)
+        case .dark: return Color(white: 0.36)
         case .navy: return Color(red: 0.02, green: 0.42, blue: 0.46)
         case .obsidian: return Color(red: 114/255, green: 81/255, blue: 190/255)
         case .forest: return Color(red: 37/255, green: 112/255, blue: 82/255)
@@ -79,7 +82,7 @@ struct AppPalette {
     }
     var accent: Color {
         switch appearance {
-        case .dark: return Color(red: 200/255, green: 194/255, blue: 184/255)
+        case .dark: return Color(white: 0.78)
         case .navy: return Color(red: 0.12, green: 0.72, blue: 0.78)
         case .obsidian: return Color(red: 167/255, green: 139/255, blue: 250/255)
         case .forest: return Color(red: 110/255, green: 231/255, blue: 183/255)

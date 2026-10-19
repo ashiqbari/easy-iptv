@@ -180,7 +180,7 @@ struct GuideSearchView: View {
                                     }
                                     if hit.program.isCurrent(at: Date()) {
                                         Button { manager.playChannel(channel); dismiss() } label: { Label("Watch", systemImage: "play.fill") }
-                                            .buttonStyle(.borderedProminent)
+                                            .buttonStyle(.borderedProminent).tint(palette.controlAccent)
                                             .accessibilityLabel("Watch \(channel.name)")
                                     } else {
                                         Label("Upcoming", systemImage: "clock").font(.caption).foregroundStyle(.secondary)

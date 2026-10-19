@@ -203,7 +203,7 @@ struct MovieDetailsView: View {
             Label(position.map { "Resume from \(PlaybackProgress.timestamp($0))" } ?? "Play", systemImage: "play.fill")
                 .font(.headline).padding(.horizontal, 16).padding(.vertical, 8)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.borderedProminent).tint(palette.controlAccent)
         DownloadControl(item: item, series: nil, details: details, downloads: manager.downloads)
             .buttonStyle(.bordered)
     }

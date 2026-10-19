@@ -294,12 +294,12 @@ public struct ChannelListView: View {
                     .padding(.horizontal)
                 
                 Button("Clear Search", action: clearSearch)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderedProminent).tint(palette.controlAccent)
             } else if manager.favoritesOnly || manager.recentlyAddedOnly || manager.minimumRating > 0 {
                 Text("No items match these filters.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Clear filters") { manager.resetLibraryFilters() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.borderedProminent).tint(palette.controlAccent)
             } else if manager.selectedCategory == "Recently Watched" {
                 Text("\(manager.selectedSection.rawValue) you play will appear here, newest first.")
                     .font(.caption)
@@ -322,7 +322,7 @@ public struct ChannelListView: View {
                 } label: {
                     Label("Add Source (Xtream API / M3U)", systemImage: "plus.circle.fill")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderedProminent).tint(palette.controlAccent)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -204,7 +204,7 @@ public struct ContentView: View {
         #else
         .preferredColorScheme(appearance.colorScheme)
         #endif
-        .tint(palette.controlAccent)
+        .tint(palette.controlTint)
         .accentColor(palette.accent)
         .environment(\.appPalette, palette)
     }
@@ -590,7 +590,7 @@ public struct ContentView: View {
                 Button("Done") {
                     manager.showingAboutSheet = false
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderedProminent).tint(palette.controlAccent)
             }
             .padding()
             .background(palette.background)
@@ -683,7 +683,7 @@ public struct AddSourceSheetView: View {
                                 Text("Connect Xtream API")
                             }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.borderedProminent).tint(palette.controlAccent)
                         .disabled(manager.xtreamServerURL.trimmingCharacters(in: .whitespaces).isEmpty ||
                                   manager.xtreamUsername.trimmingCharacters(in: .whitespaces).isEmpty ||
                                   manager.xtreamPassword.trimmingCharacters(in: .whitespaces).isEmpty ||
@@ -700,7 +700,7 @@ public struct AddSourceSheetView: View {
                                 Text("Load M3U Playlist")
                             }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.borderedProminent).tint(palette.controlAccent)
                         .disabled(manager.inputPlaylistURL.trimmingCharacters(in: .whitespaces).isEmpty || manager.isLoading)
                         .keyboardShortcut(.defaultAction)
                     }

@@ -921,9 +921,9 @@ public struct IPTVPlaybackView: View {
                 .foregroundColor(.white.opacity(0.85))
                 .frame(maxWidth: 340)
 
-            Button("Try Again") { manager.retryCurrentStream() }.buttonStyle(.borderedProminent)
+            Button("Try Again") { manager.retryCurrentStream() }.buttonStyle(.borderedProminent).tint(palette.controlAccent)
             if manager.canStartOverAfterResumeFailure {
-                Button("Start over") { manager.startCurrentStreamOver() }.buttonStyle(.borderedProminent)
+                Button("Start over") { manager.startCurrentStreamOver() }.buttonStyle(.borderedProminent).tint(palette.controlAccent)
             }
 
             #if os(macOS)
@@ -1335,12 +1335,12 @@ public struct IPTVPlaybackView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.borderedProminent).tint(palette.controlAccent)
                 .controlSize(.large)
                 if let error = manager.errorMessage {
                     Text(error).foregroundStyle(.primary).multilineTextAlignment(.center)
                     Button("Open Downloads") { manager.showingDownloads = true }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.borderedProminent).tint(palette.controlAccent)
                 }
             }
             .multilineTextAlignment(.center)

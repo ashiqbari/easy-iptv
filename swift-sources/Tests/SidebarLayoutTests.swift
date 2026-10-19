@@ -44,7 +44,8 @@ final class SidebarLayoutTests: XCTestCase {
         for appearance in [AppearancePreference.light, .dark, .forest] {
             let palette = AppPalette(appearance: appearance)
             let hosting = NSHostingView(rootView: LibrarySectionTabs(manager: manager)
-                .environment(\.appPalette, palette).preferredColorScheme(appearance.colorScheme))
+                .environment(\.appPalette, palette).background(palette.background)
+                .preferredColorScheme(appearance.colorScheme))
             window.contentView = hosting
             window.makeKeyAndOrderFront(nil)
             for width in [260.0, 420.0] {
