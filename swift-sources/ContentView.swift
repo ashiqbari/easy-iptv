@@ -21,8 +21,8 @@ private struct PlaybackBoundsPreferenceKey: PreferenceKey {
 /// Missing anchors occur during layout changes. They must never turn the player
 /// into a window-sized overlay over the category/channel panes.
 struct LibraryPaneLayout {
-    static func visibility(categories: Bool, channels: Bool) -> NavigationSplitViewVisibility {
-        categories ? .all : (channels ? .doubleColumn : .detailOnly)
+    static func visibility(categories: Bool) -> NavigationSplitViewVisibility {
+        categories ? .all : .detailOnly
     }
 
     static func playbackFrame(fullscreen: Bool, containerSize: CGSize, detailBounds: CGRect?) -> CGRect {
@@ -47,6 +47,11 @@ public struct ContentView: View {
     @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
     #if os(macOS)
     @State private var playbackBounds: CGRect = .zero
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var channelSidebarWidth: CGFloat = 400
+    @State private var previousChannelsVisibility = true
+    @GestureState private var channelSidebarDrag: CGFloat = 0
+    private var channelPaneWidth: CGFloat { min(620, max(340, channelSidebarWidth + channelSidebarDrag)) }
     #endif
     
     public init(manager: IPTVPlayerManager) {
@@ -71,6 +76,11 @@ public struct ContentView: View {
                     IPTVPlaybackView(manager: manager)
                         .frame(width: bounds.width, height: bounds.height)
                         .clipped()
+                        .overlay(alignment: .leading) {
+                            if manager.showsChannelsSidebar && !manager.isFullscreen && !manager.showingDashboard {
+                                channelResizeHandle
+                            }
+                        }
                         .position(x: bounds.midX, y: bounds.midY)
                         .opacity(manager.showingDashboard && !manager.isFullscreen ? 0 : 1)
                         .allowsHitTesting(!manager.showingDashboard || manager.isFullscreen)
@@ -78,7 +88,11 @@ public struct ContentView: View {
                 }
                 .coordinateSpace(name: "libraryPlayback")
                 .onPreferenceChange(PlaybackBoundsPreferenceKey.self) { bounds in
-                    if bounds.width > 0 && bounds.height > 0 { playbackBounds = bounds }
+                    guard bounds.width > 0 && bounds.height > 0 else { return }
+                    let animate = previousChannelsVisibility != manager.showsChannelsSidebar && !reduceMotion
+                    previousChannelsVisibility = manager.showsChannelsSidebar
+                    // The video surface is outside the panes, so its geometry needs the same transition.
+                    withAnimation(animate ? .easeInOut(duration: 0.25) : nil) { playbackBounds = bounds }
                 }
             }
 #else
@@ -206,7 +220,7 @@ public struct ContentView: View {
     #if os(macOS)
     private var categoriesVisibility: Binding<NavigationSplitViewVisibility> {
         Binding {
-            LibraryPaneLayout.visibility(categories: manager.showsCategoriesSidebar, channels: manager.showsChannelsSidebar)
+            LibraryPaneLayout.visibility(categories: manager.showsCategoriesSidebar)
         } set: { visibility in
             let visible = visibility == .all
             if visible != manager.showsCategoriesSidebar {
@@ -217,10 +231,7 @@ public struct ContentView: View {
 
     @ViewBuilder
     private var macLibraryLayout: some View {
-        // Keep native per-column titlebars. When channels are hidden, use the
-        // two-column form instead of asking .detailOnly to hide both sidebars.
-        // The player lives outside either split, so changing this chrome never
-        // recreates its rendering surface.
+        // Keep the category split mounted when Channels toggles so its collapsed state is preserved.
         if manager.showingDashboard {
             NavigationStack {
                 DashboardView(manager: manager)
@@ -231,30 +242,48 @@ public struct ContentView: View {
             }
             .toolbarBackground(palette.background, for: .windowToolbar)
             .toolbarBackground(palette.isCustom ? .visible : .automatic, for: .windowToolbar)
-        } else if manager.showsChannelsSidebar {
-            NavigationSplitView(columnVisibility: categoriesVisibility) {
-                sidebarView
-                    .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
-            } content: {
-                ChannelListView(manager: manager)
-                    .navigationSplitViewColumnWidth(min: 340, ideal: 400, max: 620)
-            } detail: {
-                playbackPlaceholder
-            }
-            .navigationSplitViewStyle(.balanced)
-            .toolbarBackground(palette.background, for: .windowToolbar)
-            .toolbarBackground(palette.isCustom ? .visible : .automatic, for: .windowToolbar)
         } else {
             NavigationSplitView(columnVisibility: categoriesVisibility) {
                 sidebarView
                     .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 420)
             } detail: {
-                playbackPlaceholder
+                HStack(spacing: 0) {
+                    ChannelListView(manager: manager)
+                        .frame(width: channelPaneWidth)
+                        .frame(width: manager.showsChannelsSidebar ? channelPaneWidth : 0, alignment: .leading)
+                        .clipped()
+                        .allowsHitTesting(manager.showsChannelsSidebar)
+                        .accessibilityHidden(!manager.showsChannelsSidebar)
+                    Divider()
+                        .frame(width: manager.showsChannelsSidebar ? 1 : 0)
+                    playbackPlaceholder
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: manager.showsChannelsSidebar)
             }
             .navigationSplitViewStyle(.balanced)
             .toolbarBackground(palette.background, for: .windowToolbar)
             .toolbarBackground(palette.isCustom ? .visible : .automatic, for: .windowToolbar)
         }
+    }
+
+    private var channelResizeHandle: some View {
+        Color.clear.frame(width: 8).contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("libraryPlayback"))
+                .updating($channelSidebarDrag) { value, drag, _ in drag = value.translation.width }
+                .onEnded { value in channelSidebarWidth = min(620, max(340, channelSidebarWidth + value.translation.width)) })
+            .onHover { hovering in (hovering ? NSCursor.resizeLeftRight : NSCursor.arrow).set() }
+            .onDisappear { NSCursor.arrow.set() }
+            .accessibilityElement()
+            .accessibilityLabel("Resize channels sidebar")
+            .accessibilityValue("\(Int(channelPaneWidth)) points")
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: channelSidebarWidth = min(620, channelSidebarWidth + 20)
+                case .decrement: channelSidebarWidth = max(340, channelSidebarWidth - 20)
+                @unknown default: break
+                }
+            }
+            .offset(x: -4)
     }
 
     private var playbackPlaceholder: some View {

@@ -55,6 +55,7 @@ final class SidebarLayoutTests: XCTestCase {
                         try await Task.sleep(nanoseconds: 20_000_000)
                     }
                 }
+                var unselectedColors: [NSColor] = []
                 func checkHighlight(_ selected: M3UItem.ContentType?) throws {
                     let bitmap = try XCTUnwrap(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
                     hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
@@ -62,8 +63,14 @@ final class SidebarLayoutTests: XCTestCase {
                         let x = 12 + CGFloat(index) * (width - 6) / 3
                         let color = try XCTUnwrap(bitmap.colorAt(x: Int(x * CGFloat(bitmap.pixelsWide) / width),
                             y: bitmap.pixelsHigh / 2)?.usingColorSpace(.sRGB))
-                        let components = [color.redComponent, color.greenComponent, color.blueComponent]
-                        let isHighlighted = components.max()! - components.min()! > 0.2
+                        if selected == nil {
+                            unselectedColors.append(color)
+                            continue
+                        }
+                        let background = unselectedColors[index]
+                        let isHighlighted = max(abs(color.redComponent - background.redComponent),
+                            abs(color.greenComponent - background.greenComponent),
+                            abs(color.blueComponent - background.blueComponent)) > 0.2
                         XCTAssertEqual(isHighlighted, selected == section,
                                        "Only \(String(describing: selected)) should be highlighted in \(appearance)")
                     }
@@ -144,8 +151,8 @@ final class SidebarLayoutTests: XCTestCase {
                                   try XCTUnwrap(labels.firstIndex(of: "Search TV Guide")))
                 let fields = searchFields(hosting)
                 let channelSearch = fields.first { $0.placeholderString == "Search in Live TV..." }
-                XCTAssertEqual(channelSearch != nil, showing)
-                if let channelSearch {
+                XCTAssertNotNil(channelSearch, "Channels stays mounted so its width can animate")
+                if showing, let channelSearch {
                     let frame = channelSearch.convert(channelSearch.bounds, to: nil)
                     XCTAssertLessThanOrEqual(frame.maxY, headerBoundary,
                                              "The panel search must stay below the native header")
@@ -220,6 +227,96 @@ final class SidebarLayoutTests: XCTestCase {
         try await checkMountedVideoSurface(useVLC: true)
     }
 
+    func testChannelTogglesWithCategoriesHiddenKeepPlaybackBoundsStable() async throws {
+        _ = NSApplication.shared
+        let activationPolicy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        defer { NSApp.setActivationPolicy(activationPolicy) }
+        let manager = manager()
+        manager.playAVKitFixture(M3UItem(name: "Sidebar transition", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-sidebar-fixture.mp4"), contentType: .movie))
+        manager.player?.replaceCurrentItem(with: nil)
+        let hosting = NSHostingView(rootView: ContentView(manager: manager))
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 1320, height: 820),
+                              styleMask: [.titled, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.toolbarStyle = .unifiedCompact
+        window.contentView = hosting
+        window.makeKeyAndOrderFront(nil)
+        window.becomeKey()
+        defer { manager.stop(); window.close() }
+
+        func surface(in view: NSView) -> NSView? {
+            if view is AVPlayerLayerNSView { return view }
+            return view.subviews.lazy.compactMap { surface(in: $0) }.first
+        }
+        func categorySearch(in view: NSView) -> NSTextField? {
+            if let field = view as? NSTextField, field.placeholderString == "Search categories…" { return field }
+            return view.subviews.lazy.compactMap { categorySearch(in: $0) }.first
+        }
+        func categorySplit(in view: NSView) -> NSSplitView? {
+            if let split = view as? NSSplitView { return split }
+            return view.subviews.lazy.compactMap { categorySplit(in: $0) }.first
+        }
+        func sample() async throws -> CGFloat {
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 16_000_000)
+            let video = try XCTUnwrap(surface(in: hosting))
+            if let layer = video.layer?.presentation(), let root = hosting.layer?.presentation() {
+                return layer.convert(layer.bounds, to: root).minX
+            }
+            return video.convert(video.bounds, to: hosting).minX
+        }
+        for _ in 0..<30 { _ = try await sample() }
+        manager.toggleCategoriesSidebar()
+        for _ in 0..<30 { _ = try await sample() }
+        let originalSplit = try XCTUnwrap(categorySplit(in: hosting))
+        for _ in 0..<4 {
+            let start = try await sample()
+            let wasShowingChannels = manager.showsChannelsSidebar
+            let button = try XCTUnwrap(window.toolbar?.visibleItems?.first { $0.label == "Channels Sidebar" }?.view)
+            let location = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                NSApp.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+            }
+            var positions = [start]
+            for _ in 0..<40 {
+                positions.append(try await sample())
+                if let search = categorySearch(in: hosting) {
+                    XCTAssertTrue(search.isHiddenOrHasHiddenAncestor || search.visibleRect.isEmpty,
+                                  "The hidden category panel must not flash during the Channels transition")
+                }
+            }
+            let end = try XCTUnwrap(positions.last)
+            if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                XCTAssertTrue(positions.contains { $0 > min(start, end) + 1 && $0 < max(start, end) - 1 },
+                              "Channels must resize the playback area smoothly rather than jump between endpoints")
+            }
+            XCTAssertTrue(categorySplit(in: hosting) === originalSplit,
+                          "Toggling Channels must not recreate the collapsed Categories split view")
+            XCTAssertEqual(manager.showsChannelsSidebar, !wasShowingChannels)
+            for position in positions {
+                XCTAssertGreaterThanOrEqual(position, min(start, end) - 1)
+                XCTAssertLessThanOrEqual(position, max(start, end) + 1)
+            }
+            XCTAssertFalse(manager.showsCategoriesSidebar)
+        }
+        let dividerX = try await sample() - 0.5
+        let start = hosting.convert(NSPoint(x: dividerX + 3, y: hosting.bounds.midY), to: nil)
+        for (type, offset) in [(NSEvent.EventType.leftMouseDown, 0.0), (.leftMouseDragged, 20.0),
+                               (.leftMouseDragged, 40.0), (.leftMouseDragged, 60.0), (.leftMouseDragged, 80.0), (.leftMouseUp, 80.0)] {
+            NSApp.sendEvent(try XCTUnwrap(NSEvent.mouseEvent(with: type, location: NSPoint(x: start.x + offset, y: start.y),
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        for _ in 0..<20 { _ = try await sample() }
+        let resized = try await sample()
+        XCTAssertEqual(resized, dividerX + 80.5, accuracy: 2, "The animated pane must retain draggable resizing")
+    }
+
     private func checkMountedVideoSurface(useVLC: Bool) async throws {
         let manager = manager()
         manager.playDirectStream(M3UItem(name: "Surface fixture", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-sidebar-fixture.mp4"), contentType: useVLC ? .live : .movie))
@@ -259,10 +356,8 @@ final class SidebarLayoutTests: XCTestCase {
     }
 
     func testNativeSplitVisibilityKeepsTheOtherPaneVisible() {
-        XCTAssertEqual(LibraryPaneLayout.visibility(categories: true, channels: true), .all)
-        XCTAssertEqual(LibraryPaneLayout.visibility(categories: false, channels: true), .doubleColumn)
-        XCTAssertEqual(LibraryPaneLayout.visibility(categories: true, channels: false), .all)
-        XCTAssertEqual(LibraryPaneLayout.visibility(categories: false, channels: false), .detailOnly)
+        XCTAssertEqual(LibraryPaneLayout.visibility(categories: true), .all)
+        XCTAssertEqual(LibraryPaneLayout.visibility(categories: false), .detailOnly)
     }
 
     func testFullscreenDoesNotForgetPaneChoices() {
