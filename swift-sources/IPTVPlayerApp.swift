@@ -33,8 +33,11 @@ enum AppearancePreference: String, CaseIterable {
 
 struct AppPalette {
     var appearance: AppearancePreference = .system
+    init(appearance: AppearancePreference = .system, colorScheme: ColorScheme = .light) {
+        self.appearance = appearance == .system ? (colorScheme == .dark ? .dark : .light) : appearance
+    }
     var isCustom: Bool { [.navy, .obsidian, .forest, .warmStone].contains(appearance) }
-    var onAccent: Color { [.navy, .obsidian, .forest].contains(appearance) ? .black : .white }
+    var onAccent: Color { [.dark, .navy, .obsidian, .forest].contains(appearance) ? .black : .white }
     var background: Color {
         switch appearance {
         case .navy: return Color(red: 0.035, green: 0.06, blue: 0.12)
@@ -66,6 +69,7 @@ struct AppPalette {
     var playbackBackground: Color { isCustom && appearance.colorScheme == .dark ? background : .black }
     var controlAccent: Color {
         switch appearance {
+        case .dark: return Color(red: 98/255, green: 95/255, blue: 89/255)
         case .navy: return Color(red: 0.02, green: 0.42, blue: 0.46)
         case .obsidian: return Color(red: 114/255, green: 81/255, blue: 190/255)
         case .forest: return Color(red: 37/255, green: 112/255, blue: 82/255)
@@ -75,6 +79,7 @@ struct AppPalette {
     }
     var accent: Color {
         switch appearance {
+        case .dark: return Color(red: 200/255, green: 194/255, blue: 184/255)
         case .navy: return Color(red: 0.12, green: 0.72, blue: 0.78)
         case .obsidian: return Color(red: 167/255, green: 139/255, blue: 250/255)
         case .forest: return Color(red: 110/255, green: 231/255, blue: 183/255)

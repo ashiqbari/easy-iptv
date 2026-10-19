@@ -8,6 +8,19 @@ import VLC
 
 @MainActor
 final class AppearanceTests: XCTestCase {
+    func testSystemPaletteFollowsEffectiveAppearanceWithoutOverridingOtherThemes() {
+        for scheme in [ColorScheme.light, .dark] {
+            let system = AppPalette(appearance: .system, colorScheme: scheme)
+            let explicit = AppPalette(appearance: scheme == .dark ? .dark : .light)
+            XCTAssertEqual(system.accent, explicit.accent)
+            XCTAssertEqual(system.controlAccent, explicit.controlAccent)
+            XCTAssertEqual(system.onAccent, explicit.onAccent)
+            for theme in AppearancePreference.allCases where theme != .system {
+                XCTAssertEqual(AppPalette(appearance: theme, colorScheme: scheme).appearance, theme)
+            }
+        }
+    }
+
     func testAppearanceDefaultsPersistsAndFallsBackForInvalidValues() {
         let suite = "appearance-tests-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
@@ -42,7 +55,11 @@ final class AppearanceTests: XCTestCase {
     #if os(macOS)
     func testCustomThemeTextContrast() throws {
         func luminance(_ color: Color) throws -> Double {
-            let rgb = try XCTUnwrap(NSColor(color).usingColorSpace(.sRGB))
+            var resolved: NSColor?
+            NSAppearance(named: .darkAqua)!.performAsCurrentDrawingAppearance {
+                resolved = NSColor(color).usingColorSpace(.sRGB)
+            }
+            let rgb = try XCTUnwrap(resolved)
             let linear = [rgb.redComponent, rgb.greenComponent, rgb.blueComponent].map { value in
                 value <= 0.04045 ? Double(value) / 12.92 : pow((Double(value) + 0.055) / 1.055, 2.4)
             }
@@ -52,7 +69,7 @@ final class AppearanceTests: XCTestCase {
             let a = try luminance(first), b = try luminance(second)
             return (max(a, b) + 0.05) / (min(a, b) + 0.05)
         }
-        for theme in [AppearancePreference.obsidian, .forest, .warmStone] {
+        for theme in [AppearancePreference.dark, .obsidian, .forest, .warmStone] {
             let palette = AppPalette(appearance: theme)
             let text: Color = theme == .warmStone ? .black : .white
             XCTAssertGreaterThanOrEqual(try contrast(text, palette.background), 4.5)
@@ -119,6 +136,12 @@ final class AppearanceTests: XCTestCase {
             if let view = view as? AVPlayerLayerNSView { return view }
             return view.subviews.lazy.compactMap { surface(in: $0) }.first
         }
+        func aspectTint(in view: NSView) -> NSColor? {
+            if let button = view as? NSPopUpButton, button.accessibilityLabel() == "Auto" {
+                return button.contentTintColor?.usingColorSpace(.sRGB)
+            }
+            return view.subviews.lazy.compactMap { aspectTint(in: $0) }.first
+        }
         try await settle()
         let original = try XCTUnwrap(surface(in: hosting))
         for option in [AppearancePreference.light, .navy, .obsidian, .forest, .warmStone, .system, .dark, .light, .system] {
@@ -138,10 +161,14 @@ final class AppearanceTests: XCTestCase {
         try await settle()
         XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .darkAqua, "System follows macOS appearance changes")
         XCTAssertEqual(probe.colorScheme, .dark)
+        let darkTint = try XCTUnwrap(aspectTint(in: hosting))
+        XCTAssertGreaterThan(darkTint.redComponent, darkTint.blueComponent, "System dark must use the warm accent")
         application.appearance = NSAppearance(named: .aqua)
         try await settle()
         XCTAssertEqual(window.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]), .aqua)
         XCTAssertEqual(probe.colorScheme, .light)
+        let lightTint = try XCTUnwrap(aspectTint(in: hosting))
+        XCTAssertGreaterThan(lightTint.blueComponent, lightTint.redComponent, "System light retains its blue accent")
         XCTAssertTrue(try XCTUnwrap(surface(in: hosting)) === original)
     }
     #endif

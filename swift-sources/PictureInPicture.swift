@@ -344,7 +344,8 @@ struct PictureInPictureControls: View {
     let onToggle: () -> Void
     let onRestore: () -> Void
     @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
-    private var palette: AppPalette { AppPalette(appearance: appearance) }
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: AppPalette { AppPalette(appearance: appearance, colorScheme: colorScheme) }
 
     var body: some View {
         HStack(spacing: 12) {

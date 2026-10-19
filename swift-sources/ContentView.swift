@@ -42,7 +42,8 @@ public struct ContentView: View {
     // MARK: - State Management
     
     @ObservedObject var manager: IPTVPlayerManager
-    private var palette: AppPalette { AppPalette(appearance: appearance) }
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: AppPalette { AppPalette(appearance: appearance, colorScheme: colorScheme) }
     @AppStorage(AppearancePreference.storageKey) private var appearance: AppearancePreference = .system
     #if os(macOS)
     @State private var playbackBounds: CGRect = .zero
@@ -189,9 +190,9 @@ public struct ContentView: View {
         #else
         .preferredColorScheme(appearance.colorScheme)
         #endif
-        .tint(AppPalette(appearance: appearance).controlAccent)
-        .accentColor(AppPalette(appearance: appearance).accent)
-        .environment(\.appPalette, AppPalette(appearance: appearance))
+        .tint(palette.controlAccent)
+        .accentColor(palette.accent)
+        .environment(\.appPalette, palette)
     }
 
     private static var backgroundNotification: Notification.Name {
