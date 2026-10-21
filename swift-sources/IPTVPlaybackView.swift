@@ -803,9 +803,14 @@ public struct IPTVPlaybackView: View {
 
     private var volumeControls: some View {
         HStack(spacing: 8) {
-            Image(systemName: manager.playbackVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                .foregroundColor(.white)
-                .accessibilityHidden(true)
+            Button { manager.toggleMute() } label: {
+                Image(systemName: manager.playbackVolume == 0 ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .foregroundColor(.white)
+                    .frame(width: 24, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(manager.playbackVolume == 0 ? "Unmute" : "Mute")
+            .help(manager.playbackVolume == 0 ? "Unmute" : "Mute")
             Slider(
                 value: Binding(
                     get: { Double(manager.playbackVolume) },

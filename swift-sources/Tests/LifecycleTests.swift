@@ -297,6 +297,10 @@ final class LifecycleTests: XCTestCase {
             manager.playbackVolume = 0.35
             XCTAssertEqual(player.audio?.volume, 35)
             XCTAssertEqual(defaults.float(forKey: "com.iptvplayer.playbackVolume"), 0.35)
+            manager.toggleMute()
+            XCTAssertEqual(player.audio?.volume, 0)
+            manager.toggleMute()
+            XCTAssertEqual(player.audio?.volume, 35)
         }
     }
 

@@ -566,8 +566,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     @Published public var playbackVolume: Float = UserDefaults.standard.object(forKey: "com.iptvplayer.playbackVolume") == nil
         ? 0.8
         : UserDefaults.standard.float(forKey: "com.iptvplayer.playbackVolume") {
-        didSet { applyPlaybackVolume() }
+        didSet {
+            if playbackVolume == 0, oldValue > 0 { lastAudibleVolume = oldValue }
+            applyPlaybackVolume()
+        }
     }
+    private var lastAudibleVolume: Float = 0.8
 
     #if os(macOS)
     /// VLC playback instance used for streams AVPlayer cannot decode.
@@ -1630,6 +1634,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         window.titleVisibility = .hidden
     }
     #endif
+
+    public func toggleMute() {
+        playbackVolume = playbackVolume == 0 ? lastAudibleVolume : 0
+    }
 
     private func applyPlaybackVolume() {
         storageDefaults.set(playbackVolume, forKey: "com.iptvplayer.playbackVolume")

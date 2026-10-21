@@ -5,6 +5,33 @@ import SwiftUI
 
 @MainActor
 final class PlaybackControlsTests: XCTestCase {
+    func testMuteRestoresVolumeAndSliderUnmutes() throws {
+        let suite = "mute-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer {
+            manager.stop()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        manager.playAVKitFixture(M3UItem(name: "Mute fixture", streamURL: URL(fileURLWithPath: "/private/tmp/mute-fixture.mp4"), contentType: .movie))
+        let player = try XCTUnwrap(manager.player)
+        manager.playbackVolume = 0.35
+        manager.toggleMute()
+        XCTAssertEqual(manager.playbackVolume, 0)
+        XCTAssertEqual(player.volume, 0)
+        manager.toggleMute()
+        XCTAssertEqual(manager.playbackVolume, 0.35)
+        XCTAssertEqual(player.volume, 0.35)
+        manager.toggleMute()
+        manager.playbackVolume = 0.6
+        XCTAssertEqual(player.volume, 0.6)
+        manager.toggleMute()
+        manager.toggleMute()
+        XCTAssertEqual(manager.playbackVolume, 0.6)
+        manager.playbackVolume = 0
+        manager.toggleMute()
+        XCTAssertEqual(manager.playbackVolume, 0.6)
+    }
+
     func testDoubleClickVideoTogglesFullscreenWithVisibleAndHiddenControls() async throws {
         _ = NSApplication.shared
         let activationPolicy = NSApp.activationPolicy()
