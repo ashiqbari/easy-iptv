@@ -165,7 +165,7 @@ final class LibrarySortingTests: XCTestCase {
         manager.moveFavorite(catalog[1], before: catalog[0]); manager.selectedCategory = "Favorites"
         XCTAssertEqual(manager.filteredChannels.map(\.id), catalog.reversed().map(\.id))
         manager.librarySortOrder = .nameAscending
-        XCTAssertEqual(manager.filteredChannels.map(\.id), catalog.map(\.id))
+        XCTAssertEqual(manager.filteredChannels.map(\.id), catalog.reversed().map(\.id))
         manager.librarySortOrder = .provider
         XCTAssertEqual(manager.filteredChannels.map(\.id), catalog.reversed().map(\.id))
         manager.librarySortOrder = .nameDescending; manager.favoritesOnly = true
@@ -177,6 +177,45 @@ final class LibrarySortingTests: XCTestCase {
         let fallback = IPTVPlayerManager(progressDefaults: defaults)
         defer { fallback.stop() }
         XCTAssertEqual(fallback.librarySortOrder, .provider)
+    }
+
+    func testFavoritesIgnoreLibraryFiltersAndSortAcrossSections() async {
+        let suite = "favorites-filters-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        let catalog = M3UItem.ContentType.allCases.flatMap { type in
+            [item("Alpha", type: type), item("Bravo", type: type), item("Not favorite", type: type)]
+        }
+        var loader = LibraryLoader(); loader.playlist = { _ in catalog }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer {
+            manager.stop(); manager.libraryPersistence.invalidatePendingWrites()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        await manager.loadPlaylist(from: "https://fixture.invalid/list")
+        for type in M3UItem.ContentType.allCases {
+            let items = catalog.filter { $0.contentType == type }
+            manager.toggleFavorite(items[0]); manager.toggleFavorite(items[1])
+            manager.moveFavorite(items[1], before: items[0])
+            manager.selectedSection = type
+            manager.favoritesOnly = true
+            manager.recentlyAddedOnly = true
+            manager.minimumRating = 9
+            for category in ["Favorites", "★ Favorites"] {
+                manager.selectedCategory = category
+                for order in LibrarySortOrder.allCases {
+                    manager.librarySortOrder = order
+                    XCTAssertEqual(manager.filteredChannels.map(\.id), [items[1].id, items[0].id])
+                }
+                manager.searchText = "Alpha"
+                XCTAssertEqual(manager.filteredChannels.map(\.id), [items[0].id])
+                manager.searchText = ""
+            }
+            manager.selectedCategory = "All"
+            XCTAssertTrue(manager.filteredChannels.isEmpty)
+            XCTAssertTrue(manager.favoritesOnly)
+            XCTAssertTrue(manager.recentlyAddedOnly)
+            XCTAssertEqual(manager.minimumRating, 9)
+            XCTAssertEqual(manager.librarySortOrder, LibrarySortOrder.allCases.last)
+        }
     }
 
     func testLargeLibrarySortSearchCancellationAndPlaybackStayResponsive() async throws {

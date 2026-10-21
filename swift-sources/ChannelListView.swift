@@ -295,7 +295,7 @@ public struct ChannelListView: View {
                 
                 Button("Clear Search", action: clearSearch)
                 .buttonStyle(.borderedProminent).tint(palette.controlAccent)
-            } else if manager.favoritesOnly || manager.recentlyAddedOnly || manager.minimumRating > 0 {
+            } else if manager.libraryFiltersApplyToSelection && (manager.favoritesOnly || manager.recentlyAddedOnly || manager.minimumRating > 0) {
                 Text("No items match these filters.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Clear filters") { manager.resetLibraryFilters() }

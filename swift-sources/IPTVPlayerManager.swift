@@ -176,6 +176,9 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     var hasCatalogDates: Bool { sectionsWithCatalogDates.contains(selectedSection) }
     var hasRatings: Bool { sectionsWithRatings.contains(selectedSection) }
     var libraryFiltersActive: Bool { librarySortOrder != .provider || favoritesOnly || recentlyAddedOnly || minimumRating > 0 }
+    var libraryFiltersApplyToSelection: Bool {
+        selectedCategory != "Recently Watched" && selectedCategory != "Favorites" && selectedCategory != "★ Favorites"
+    }
     func resetLibraryFilters() {
         librarySortOrder = .provider
         favoritesOnly = false
@@ -753,11 +756,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             result = result.filter { $0.displayGroup == selectedCategory }
         }
         
-        if favoritesOnly { result = result.filter { favoriteStreamURLs.contains($0.streamURL.absoluteString) } }
+        // History and favorites keep their own order independently of library settings.
+        let applyFilters = libraryFiltersApplyToSelection
+        if favoritesOnly && applyFilters { result = result.filter { favoriteStreamURLs.contains($0.streamURL.absoluteString) } }
         let query = Self.normalizedLibraryText(searchText.trimmingCharacters(in: .whitespacesAndNewlines))
-        let order = librarySortOrder
-        let cutoff = recentlyAddedOnly ? Date().addingTimeInterval(-30 * 86_400) : nil
-        let rating = minimumRating
+        let order = applyFilters ? librarySortOrder : .provider
+        let cutoff = recentlyAddedOnly && applyFilters ? Date().addingTimeInterval(-30 * 86_400) : nil
+        let rating = applyFilters ? minimumRating : 0
         let searchIndex = librarySearchTextByID
         guard result.count > 1_000 && (!query.isEmpty || order != .provider || cutoff != nil || rating > 0) else {
             isFilteringLibrary = false

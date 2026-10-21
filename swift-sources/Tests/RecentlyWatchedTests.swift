@@ -6,6 +6,42 @@ import VLC
 
 @MainActor
 final class RecentlyWatchedTests: XCTestCase {
+    func testHistoryIgnoresLibraryFiltersAndSortWithoutChangingTheirSettings() async {
+        let suite = "recent-filters-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        var catalog: [M3UItem] = []
+        for type in M3UItem.ContentType.allCases { catalog += [media(1, type: type), media(2, type: type)] }
+        let items = catalog
+        var loader = LibraryLoader(); loader.playlist = { _ in items }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer {
+            manager.stop(); manager.libraryPersistence.invalidatePendingWrites()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        await manager.loadPlaylist(from: "https://fixture.invalid/history")
+        for item in items { manager.recentlyWatchedStore.record(item) }
+        for type in M3UItem.ContentType.allCases {
+            manager.selectedSection = type
+            manager.selectedCategory = "Recently Watched"
+            let expected = items.filter { $0.contentType == type }.reversed().map(\.id)
+            manager.favoritesOnly = true
+            manager.recentlyAddedOnly = true
+            manager.minimumRating = 9
+            for order in LibrarySortOrder.allCases {
+                manager.librarySortOrder = order
+                XCTAssertEqual(manager.filteredChannels.map(\.id), expected)
+            }
+            manager.searchText = "Title 1"
+            XCTAssertEqual(manager.filteredChannels.map(\.id), [expected[1]])
+            manager.searchText = ""
+            XCTAssertEqual(manager.filteredChannels.map(\.id), expected)
+            manager.selectedCategory = "All"
+            XCTAssertTrue(manager.filteredChannels.isEmpty)
+            XCTAssertTrue(manager.favoritesOnly)
+            XCTAssertTrue(manager.recentlyAddedOnly)
+            XCTAssertEqual(manager.minimumRating, 9)
+        }
+    }
+
     private func media(_ id: Int, type: M3UItem.ContentType = .movie, episode: Int? = nil,
                        host: String = "provider.example") -> M3UItem {
         M3UItem(name: "Title \(id)", streamURL: URL(string: "https://\(host)/user/password/\(id).mp4")!,
