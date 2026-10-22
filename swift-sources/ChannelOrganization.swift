@@ -37,7 +37,15 @@ struct ChannelOrganizationView: View {
     private var items: [M3UItem] {
         manager.channels.filter { $0.contentType == section && (search.isEmpty || $0.name.localizedStandardContains(search) || $0.groupTitle.localizedStandardContains(search)) }
     }
+    private var displayedItems: [M3UItem] {
+        if scope == "Categories" {
+            let matchingGroups = search.isEmpty ? nil : Set(items.map(\.groupTitle))
+            return manager.organizationCategories(in: section).filter { matchingGroups?.contains($0.groupTitle) ?? true }
+        }
+        return scope == "Favorites" ? manager.organization.orderedFavorites(items.filter { manager.isFavorite($0) }, key: manager.organizationKey) : items
+    }
     var body: some View {
+        let displayed = displayedItems
         NavigationStack {
             VStack(alignment: .leading, spacing: 14) {
                 Picker("Section", selection: $section) {
@@ -47,27 +55,29 @@ struct ChannelOrganizationView: View {
                     ForEach(["Channels", "Categories", "Favorites"], id: \.self) { Text($0) }
                 }.pickerStyle(.segmented)
                 TextField("Search channels or categories…", text: $search).textFieldStyle(.roundedBorder)
+                HStack {
+                    Button("Select All") { setAllHidden(false, items: displayed) }
+                    Button("Deselect All") { setAllHidden(true, items: displayed) }
+                }
+                .disabled(displayed.isEmpty)
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         if scope == "Categories" {
-                            let matchingGroups = search.isEmpty ? nil : Set(items.map(\.groupTitle))
-                            let representatives = manager.organizationCategories(in: section).filter { matchingGroups?.contains($0.groupTitle) ?? true }
-                            ForEach(representatives) { item in
+                            ForEach(displayed) { item in
                                 Toggle(item.groupTitle, isOn: Binding(get: {
                                     !manager.organization.hiddenCategories.contains(manager.organizationCategoryKey(item))
                                 }, set: { manager.setCategoryHidden(item, hidden: !$0) }))
                             }
                         } else {
-                            let visible = scope == "Favorites" ? manager.organization.orderedFavorites(items.filter { manager.isFavorite($0) }, key: manager.organizationKey) : items
-                            ForEach(Array(visible.enumerated()), id: \.element.id) { index, item in
+                            ForEach(Array(displayed.enumerated()), id: \.element.id) { index, item in
                                 HStack {
                                     Toggle(item.name, isOn: Binding(get: { !manager.organization.hidden.contains(manager.organizationKey(item)) },
                                                                   set: { manager.setChannelHidden(item, hidden: !$0) }))
                                     if scope == "Favorites" {
-                                        Button { manager.moveFavorite(item, before: visible[index - 1]) } label: { Image(systemName: "arrow.up") }
+                                        Button { manager.moveFavorite(item, before: displayed[index - 1]) } label: { Image(systemName: "arrow.up") }
                                             .disabled(index == 0).accessibilityLabel("Move \(item.name) up")
-                                        Button { manager.moveFavorite(visible[index + 1], before: item) } label: { Image(systemName: "arrow.down") }
-                                            .disabled(index == visible.count - 1).accessibilityLabel("Move \(item.name) down")
+                                        Button { manager.moveFavorite(displayed[index + 1], before: item) } label: { Image(systemName: "arrow.down") }
+                                            .disabled(index == displayed.count - 1).accessibilityLabel("Move \(item.name) down")
                                     }
                                 }
                             }
@@ -80,5 +90,10 @@ struct ChannelOrganizationView: View {
             .navigationTitle("Organize Channels")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }.frame(minWidth: 450, idealWidth: 600, minHeight: 440)
+    }
+
+    private func setAllHidden(_ hidden: Bool, items: [M3UItem]) {
+        if scope == "Categories" { manager.setCategoriesHidden(items, hidden: hidden) }
+        else { manager.setChannelsHidden(items, hidden: hidden) }
     }
 }

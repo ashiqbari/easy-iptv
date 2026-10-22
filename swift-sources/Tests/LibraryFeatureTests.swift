@@ -146,6 +146,49 @@ final class LibraryFeatureTests: XCTestCase {
         restored.stop(); restored.libraryPersistence.invalidatePendingWrites()
     }
 
+    func testBulkOrganizationOnlyChangesSuppliedItemsAndCategories() async throws {
+        let suite = "bulk-organization-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        let first = item("first"), second = item("second", host: "second.invalid")
+        let other = item("other", group: "Sports")
+        let movie = M3UItem(name: "Movie", groupTitle: "News", streamURL: URL(string: "https://provider.invalid/movie/1.mp4")!, contentType: .movie)
+        let catalog = [first, second, other, movie]
+        var loader = LibraryLoader(); loader.playlist = { _ in catalog }
+        let manager = IPTVPlayerManager(progressDefaults: defaults, libraryLoader: loader)
+        defer {
+            manager.stop(); manager.libraryPersistence.invalidatePendingWrites()
+            defaults.removePersistentDomain(forName: suite)
+        }
+        await manager.loadPlaylist(from: "https://fixture.invalid/list")
+        manager.toggleFavorite(first); manager.toggleFavorite(second)
+        manager.moveFavorite(second, before: first)
+        manager.recentlyWatchedStore.record(first)
+        let favoriteOrder = manager.organization.favoriteOrder
+        manager.setChannelsHidden([other, movie], hidden: true)
+        manager.setChannelsHidden([first, second], hidden: true)
+        XCTAssertTrue(manager.filteredChannels.isEmpty)
+        manager.setChannelsHidden([first, second], hidden: false)
+        XCTAssertEqual(manager.filteredChannels.map(\.id), [first.id, second.id])
+        XCTAssertEqual(manager.organization.hidden, Set([other, movie].map(manager.organizationKey)))
+        manager.setCategoriesHidden([other, movie], hidden: true)
+        manager.setCategoriesHidden([first], hidden: true)
+        XCTAssertTrue(manager.filteredChannels.isEmpty, "Both CDN hosts in News must be hidden")
+        manager.setCategoriesHidden([first], hidden: false)
+        XCTAssertEqual(manager.filteredChannels.map(\.id), [first.id, second.id])
+        XCTAssertEqual(manager.organization.hiddenCategories, Set([other, movie].map(manager.organizationCategoryKey)))
+        XCTAssertTrue(manager.isFavorite(first)); XCTAssertTrue(manager.isFavorite(second))
+        XCTAssertEqual(manager.organization.favoriteOrder, favoriteOrder)
+        XCTAssertEqual(manager.recentlyWatchedStore.records.count, 1)
+        let data = try XCTUnwrap(defaults.data(forKey: "com.iptvplayer.organization.v1"))
+        let saved = try JSONDecoder().decode(ChannelOrganization.self, from: data)
+        XCTAssertEqual(saved.hidden, manager.organization.hidden)
+        XCTAssertEqual(saved.hiddenCategories, manager.organization.hiddenCategories)
+        manager.setChannelsHidden(catalog, hidden: false)
+        manager.setCategoriesHidden(manager.organizationCategories(in: .live), hidden: false)
+        XCTAssertEqual(manager.filteredChannels.map(\.id), [first.id, second.id, other.id])
+        manager.selectedSection = .movie
+        XCTAssertTrue(manager.filteredChannels.isEmpty, "Bulk live selection must preserve movie visibility")
+    }
+
     func testLargeLibraryOrganizationTogglesStayResponsiveAcrossProviders() async throws {
         let suite = "organization-performance-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!

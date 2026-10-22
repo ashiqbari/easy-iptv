@@ -1859,11 +1859,22 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         organizationCategoryItems[section] ?? []
     }
     func setChannelHidden(_ item: M3UItem, hidden: Bool) {
-        if hidden { organization.hidden.insert(organizationKey(item)) }
-        else { organization.hidden.remove(organizationKey(item)) }
+        setChannelsHidden([item], hidden: hidden)
+    }
+    func setChannelsHidden(_ items: [M3UItem], hidden: Bool) {
+        let keys = items.map(organizationKey)
+        var updated = organization
+        if hidden { updated.hidden.formUnion(keys) }
+        else { updated.hidden.subtract(keys) }
+        organization = updated
     }
     func setCategoryHidden(_ item: M3UItem, hidden: Bool) {
-        let keys = categoryKeysBySection[item.contentType]?[item.groupTitle] ?? [organizationCategoryKey(item)]
+        setCategoriesHidden([item], hidden: hidden)
+    }
+    func setCategoriesHidden(_ items: [M3UItem], hidden: Bool) {
+        let keys = items.reduce(into: Set<String>()) { keys, item in
+            keys.formUnion(categoryKeysBySection[item.contentType]?[item.groupTitle] ?? [organizationCategoryKey(item)])
+        }
         var updated = organization
         if hidden { updated.hiddenCategories.formUnion(keys) }
         else { updated.hiddenCategories.subtract(keys) }
