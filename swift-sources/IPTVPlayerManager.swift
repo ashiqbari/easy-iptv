@@ -213,6 +213,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     private var vlcResumeSeekIssued = false
     private var resumeTimeoutTask: Task<Void, Never>?
     private var wantsPlayback = false
+    private var pausedPlayback: (since: Date, position: Double)?
     private var remoteCommandTargets: [(MPRemoteCommand, Any)] = []
     private var playbackFinished = false
     private var lastProgressSave = Date.distantPast
@@ -1363,6 +1364,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func playbackPosition() -> Double {
+        if let pausedPlayback { return pausedPlayback.position }
         #if os(macOS)
         if let vlcPlayer, useVLCPlayback { return max(0, Double(vlcPlayer.time.intValue) / 1000) }
         #endif
@@ -1390,6 +1392,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         if nextItem == nil { controlsInteractionHolds.removeAll() }
         cancelControlsAutoHide()
         saveProgress(force: true)
+        pausedPlayback = nil
         wantsPlayback = false
         pendingResumePosition = nil
         vlcResumeSeekIssued = false
@@ -1419,7 +1422,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     /// Explicitly hiding/backgrounding the app pauses without discarding the surface.
-    func pauseForBackground() {
+    func pauseForBackground(now: Date = Date()) {
+        if wantsPlayback, pausedPlayback == nil {
+            pausedPlayback = (now, pendingResumePosition ?? playbackPosition())
+        }
         cancelStreamRecovery()
         saveProgress(force: true)
         wantsPlayback = false
@@ -1555,6 +1561,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     public func seek(to seconds: Double) {
         guard seconds.isFinite, pendingResumePosition == nil, !isViewingSeriesDetails else { return }
         playbackFinished = false
+        if pausedPlayback != nil { pausedPlayback?.position = max(0, seconds) }
         subtitles.clearForSeek()
         defer { updateRemoteNowPlaying() }
         #if os(macOS)
@@ -1664,6 +1671,23 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             pauseForBackground()
             return
         }
+        var connectionFailed = player?.currentItem == nil || player?.currentItem?.status == .failed
+        #if os(macOS)
+        if useVLCPlayback, let vlcPlayer {
+            connectionFailed = [.error, .ended, .stopped].contains(vlcPlayer.state)
+        }
+        #endif
+        if let pausedPlayback, connectionFailed || Date().timeIntervalSince(pausedPlayback.since) >= 60,
+           let channel = currentChannel,
+           ["http", "https"].contains(channel.streamURL.scheme?.lowercased() ?? ""),
+           downloads.localURL(for: channel) == nil {
+            // Providers can expire idle connections; reopen without losing the paused clock.
+            playDirectStream(channel, useVLC: useVLCPlayback,
+                             position: channel.isVOD ? pausedPlayback.position : nil,
+                             preservingDetails: isViewingMovieDetails || isViewingSeriesDetails)
+            return
+        }
+        pausedPlayback = nil
         cancelStreamRecovery()
         wantsPlayback = true
         playbackFinished = false
@@ -2049,7 +2073,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         playbackEndObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
                                                                     object: playerItem, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in
-                guard let self, self.player?.currentItem === playerItem, !self.useVLCPlayback else { return }
+                guard let self, self.player?.currentItem === playerItem, !self.useVLCPlayback,
+                      self.wantsPlayback else { return }
                 self.saveProgress(force: true, completed: true)
                 self.playbackFinished = true
                 if self.currentChannel?.contentType == .live, self.wantsPlayback { self.recoverStream(); return }
@@ -2089,6 +2114,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                     } else if self.wantsPlayback { self.player?.play() }
                     self.subtitles.loadTracksIfNeeded()
                 case .failed:
+                    guard self.wantsPlayback else { return }
 #if os(macOS)
                     if !self.useVLCPlayback, self.currentChannel != nil {
                         if let channel = self.currentChannel {
@@ -2264,6 +2290,7 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
                 self.subtitles.nativePlayerDidStart()
                 if self.audioTracks.showingMenu { self.audioTracks.refresh() }
             } else if state == .ended {
+                guard self.wantsPlayback else { return }
                 if self.currentChannel?.contentType == .live, self.wantsPlayback { self.recoverStream(); return }
                 self.saveProgress(force: true, completed: true)
                 self.playbackFinished = true

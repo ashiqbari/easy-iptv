@@ -319,6 +319,109 @@ final class PlaybackProgressTests: XCTestCase {
         manager.stop()
     }
 
+    @MainActor func testLongNetworkPauseReopensBothEnginesAtPausedPosition() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        #if os(macOS)
+        let engines = [false, true]
+        #else
+        let engines = [false]
+        #endif
+        for useVLC in engines {
+            let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+            defer { manager.stop() }
+            manager.playAVKitFixture(media(url: url))
+            #if os(macOS)
+            if useVLC {
+                manager.playCurrentStreamWithVLC()
+                let vlc = try XCTUnwrap(manager.vlcPlayer)
+                vlc.media?.addOption(":vout=dummy")
+                vlc.media?.addOption(":aout=dummy")
+                vlc.play()
+            }
+            #endif
+            let ready = await waitUntil { manager.isPlaying && manager.duration > 0 }
+            XCTAssertTrue(ready)
+            manager.seek(to: 80)
+            let sought = await waitUntil {
+                #if os(macOS)
+                if useVLC { return abs(Double(manager.vlcPlayer?.time.intValue ?? 0) / 1000 - 80) < 2 }
+                #endif
+                return abs((manager.player?.currentTime().seconds ?? 0) - 80) < 2
+            }
+            XCTAssertTrue(sought)
+            let remote = media()
+            manager.currentChannel = remote
+            let originalAV = manager.player
+            #if os(macOS)
+            let originalVLC = manager.vlcPlayer
+            #endif
+            manager.pauseForBackground(now: Date().addingTimeInterval(-120))
+            manager.pauseForBackground() // Repeated background notifications must keep the original pause time.
+            if !useVLC {
+                NotificationCenter.default.post(name: .AVPlayerItemDidPlayToEndTime, object: originalAV?.currentItem)
+                try await Task.sleep(nanoseconds: 20_000_000)
+                XCTAssertFalse(manager.progressStore.progress(for: remote)?.completed ?? true)
+                XCTAssertTrue(manager.player === originalAV)
+            }
+            manager.seek(to: 90)
+            manager.isViewingSeriesDetails = true
+            XCTAssertEqual(manager.handleRemotePlayback(.play), .success)
+            XCTAssertNil(manager.resumeRequest)
+            XCTAssertEqual(manager.currentChannel?.id, remote.id)
+            XCTAssertTrue(manager.isViewingSeriesDetails)
+            XCTAssertEqual(manager.useVLCPlayback, useVLC)
+            #if os(macOS)
+            if useVLC { XCTAssertTrue(manager.vlcPlayer !== originalVLC) }
+            else { XCTAssertTrue(manager.player !== originalAV) }
+            #else
+            XCTAssertTrue(manager.player !== originalAV)
+            #endif
+            manager.stop()
+            XCTAssertEqual(manager.progressStore.progress(for: remote)?.position ?? 0, 90, accuracy: 1)
+        }
+    }
+
+    @MainActor func testShortPauseKeepsConnectionButMissingItemReopensAtBookmark() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        manager.playAVKitFixture(media(url: url))
+        let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
+        XCTAssertTrue(ready)
+        let player = try XCTUnwrap(manager.player)
+        await withCheckedContinuation { continuation in
+            player.seek(to: CMTime(seconds: 80, preferredTimescale: 600), toleranceBefore: .zero,
+                        toleranceAfter: .zero) { _ in continuation.resume() }
+        }
+        let remote = media()
+        manager.currentChannel = remote
+        manager.togglePlayPause()
+        manager.togglePlayPause()
+        XCTAssertTrue(manager.player === player)
+        manager.togglePlayPause()
+        player.replaceCurrentItem(with: nil)
+        manager.togglePlayPause()
+        XCTAssertTrue(manager.player !== player)
+        manager.stop()
+        XCTAssertEqual(manager.progressStore.progress(for: remote)?.position ?? 0, 80, accuracy: 2)
+    }
+
+    @MainActor func testLongLocalPauseKeepsExistingPlayer() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        manager.playAVKitFixture(media(url: url))
+        let ready = await waitUntil { manager.player?.currentItem?.status == .readyToPlay }
+        XCTAssertTrue(ready)
+        let player = manager.player
+        manager.pauseForBackground(now: Date().addingTimeInterval(-120))
+        manager.togglePlayPause()
+        XCTAssertTrue(manager.player === player)
+    }
+
     @MainActor func testPeriodicSaveAndCompletionSurviveExit() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
