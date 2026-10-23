@@ -5,6 +5,91 @@ import SwiftUI
 
 @MainActor
 final class PlaybackControlsTests: XCTestCase {
+    func testSpaceTogglesOnceWithFocusedSliderAndHiddenControlsForBothEngines() async throws {
+        _ = NSApplication.shared
+        let policy = NSApp.activationPolicy()
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        defer { NSApp.setActivationPolicy(policy) }
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        for useVLC in [false, true] {
+            let suite = "keyboard-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+            let manager = IPTVPlayerManager(progressDefaults: defaults)
+            let item = M3UItem(name: "Keyboard fixture", streamURL: url, contentType: .movie)
+            if useVLC { manager.playDirectStream(item) }
+            else { manager.playAVKitFixture(item) }
+            let hosting = NSHostingView(rootView: IPTVPlaybackView(manager: manager))
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 650),
+                                  styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            let content = NSView(frame: NSRect(x: 0, y: 0, width: 1000, height: 650))
+            hosting.frame = content.bounds
+            hosting.autoresizingMask = [.width, .height]
+            content.addSubview(hosting)
+            window.contentView = content
+            window.makeKeyAndOrderFront(nil)
+            window.makeKey()
+            defer {
+                manager.stop(); window.close()
+                manager.libraryPersistence.invalidatePendingWrites()
+                defaults.removePersistentDomain(forName: suite)
+            }
+            func waitForPlayback(_ playing: Bool) async throws {
+                for _ in 0..<300 {
+                    if manager.isPlaying == playing { return }
+                    hosting.layoutSubtreeIfNeeded()
+                    try await Task.sleep(nanoseconds: 10_000_000)
+                }
+                XCTFail("Space did not set playing=\(playing), VLC=\(useVLC)")
+            }
+            func space(modifiers: NSEvent.ModifierFlags = [], repeatKey: Bool = false) throws -> NSEvent {
+                try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: " ", charactersIgnoringModifiers: " ", isARepeat: repeatKey, keyCode: 49))
+            }
+            func send(_ event: NSEvent) {
+                // Exercise the local monitor before native responder dispatch.
+                NSApp.postEvent(event, atStart: true)
+                if let next = NSApp.nextEvent(matching: .keyDown, until: Date().addingTimeInterval(0.02),
+                                              inMode: .default, dequeue: true) { NSApp.sendEvent(next) }
+            }
+            try await waitForPlayback(true)
+            hosting.layoutSubtreeIfNeeded()
+            try await Task.sleep(nanoseconds: 100_000_000)
+            let slider = NSSlider(value: 0.5, minValue: 0, maxValue: 1, target: nil, action: nil)
+            content.addSubview(slider)
+            window.makeFirstResponder(slider)
+            let volume = manager.playbackVolume
+            for visible in [true, false] {
+                manager.showVideoControls = visible
+                send(try space())
+                try await waitForPlayback(false)
+                send(try space(repeatKey: true))
+                try await Task.sleep(nanoseconds: 50_000_000)
+                XCTAssertFalse(manager.isPlaying, "Holding Space must not repeatedly toggle")
+                send(try space())
+                try await waitForPlayback(true)
+            }
+            XCTAssertEqual(manager.playbackVolume, volume)
+            send(try space())
+            try await waitForPlayback(false)
+            let field = NSTextField(string: "Find")
+            field.frame = NSRect(x: 20, y: 20, width: 200, height: 24)
+            content.addSubview(field)
+            window.makeFirstResponder(field)
+            let editor = try XCTUnwrap(field.currentEditor())
+            editor.selectedRange = NSRange(location: 4, length: 0)
+            send(try space())
+            XCTAssertEqual(field.stringValue, "Find ")
+            XCTAssertFalse(manager.isPlaying)
+            window.makeFirstResponder(slider)
+            send(try space(modifiers: .shift))
+            try await Task.sleep(nanoseconds: 50_000_000)
+            XCTAssertFalse(manager.isPlaying, "Modified Space must keep its native behavior")
+        }
+    }
+
     func testMuteRestoresVolumeAndSliderUnmutes() throws {
         let suite = "mute-\(UUID())", defaults = UserDefaults(suiteName: suite)!
         let manager = IPTVPlayerManager(progressDefaults: defaults)

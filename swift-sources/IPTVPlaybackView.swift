@@ -29,7 +29,7 @@ private struct PlaybackBadge: View {
 }
 
 #if os(macOS)
-/// Observes input without replacing the AVPlayer/VLC surface or swallowing its events.
+/// Tracks player activity and routes playback keys before focused native controls consume them.
 struct PlaybackActivityTracking: NSViewRepresentable {
     let manager: IPTVPlayerManager
     func makeNSView(context: Context) -> PlaybackActivityNSView { PlaybackActivityNSView(manager: manager) }
@@ -92,8 +92,7 @@ final class PlaybackActivityNSView: NSView {
         window.acceptsMouseMovedEvents = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .rightMouseDown,
             .otherMouseDown, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .scrollWheel, .keyDown, .flagsChanged]) { [weak self] event in
-            self?.handle(event)
-            return event
+            self?.handle(event) == true ? nil : event
         }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -154,14 +153,25 @@ final class PlaybackActivityNSView: NSView {
         }
     }
 
-    func handle(_ event: NSEvent) {
-        guard let manager, event.window === window else { return }
+    @discardableResult
+    func handle(_ event: NSEvent) -> Bool {
+        guard let manager, let window, event.window === window else { return false }
         if event.type == .keyDown || event.type == .flagsChanged {
             manager.notePlayerActivity()
         } else if bounds.contains(convert(event.locationInWindow, from: nil)) {
             manager.pointerInsidePlayer = true
             manager.notePlayerActivity()
         } else { leavePlayer() }
+        guard event.type == .keyDown, event.charactersIgnoringModifiers == " ",
+              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+              window.attachedSheet == nil, NSApp.modalWindow == nil,
+              !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField),
+              trackedMenus.isEmpty, !manager.audioTracks.showingMenu, !manager.subtitles.showingMenu,
+              !manager.showingDashboard, !manager.showingDownloads,
+              !manager.isViewingMovieDetails, !manager.isViewingSeriesDetails,
+              manager.currentChannel != nil, manager.resumeRequest == nil else { return false }
+        if !event.isARepeat { manager.togglePlayPause() }
+        return true
     }
 
     private func updatePointer(activity: Bool = true) {
@@ -349,8 +359,6 @@ public struct IPTVPlaybackView: View {
         .background { PlaybackActivityTracking(manager: manager) }
         .background {
             HStack(spacing: 0) {
-                Button("") { manager.togglePlayPause() }
-                    .keyboardShortcut(.space, modifiers: [])
                 Button("") { manager.toggleFullscreen() }
                     .keyboardShortcut("f", modifiers: [])
                 Button("") { manager.seekBy(seconds: -10) }
