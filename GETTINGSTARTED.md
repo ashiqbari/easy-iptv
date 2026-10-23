@@ -36,7 +36,7 @@ cd swift-sources
 
 The app bundle will be at `swift-sources/build/EasyIPTV.app`. App-only builds default to Debug; add `--release` for an optimized build. DMG builds default to Release. Both reuse the SwiftPM cache; add `--clean` only when a fresh build is needed.
 
-Batch small UI edits before assembling the app. Use focused checks during development; installed Git hooks check staged whitespace on commit and run the full test suite once before push (see README).
+Batch small UI edits before assembling the app. Use focused checks during development and run the full test suite manually when needed (see README).
 
 The script will:
 1. Resolve the SwiftPM VLC dependency and compile the native binary.

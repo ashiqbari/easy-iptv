@@ -249,33 +249,19 @@ For the full build and release instructions, see [Getting Started](GETTINGSTARTE
 
 ## For contributors
 
-### Tests & commit checks
+### Tests
 
 Run the full suite with `cd swift-sources && swift test -c release`.
 Check packaging flags and cache handling without compiling with
 `./scripts/test-build-workflow.sh` from the repository root.
 The suite includes playback/resume, subtitles, lifecycle cancellation, cache
-persistence, and Git hook integration tests. Provider requests are mocked in
-lifecycle tests; hook tests use disposable repositories and do not commit here.
-
-Install the versioned Git hooks once per clone from the repository root:
-
-```sh
-./.githooks/install.sh
-```
-
-Commits check staged whitespace quickly. Each push runs the full release test
-suite once, even when pushing several commits. Failed tests, compilation errors,
-or a missing Swift toolchain block the push. Hooks do not stage files or create
-commits. Tests use the working tree, so commit intended source changes before
-pushing. The installer preserves a different existing hook
-configuration instead of silently replacing it.
+persistence. Provider requests are mocked in lifecycle tests.
+Commits and pushes do not run checks automatically; run the relevant checks manually.
 
 ### Find your way around
 
 - `swift-sources/` — Native Swift app, VLC dependency configuration, and build scripts.
 - `swift-sources/Tests/` — Playback, subtitles, guide, lifecycle, and UI regression tests.
-- `.githooks/` — Fast commit checks, full pre-push tests, and installer.
 - `.github/workflows/release.yml` — macOS DMG build and GitHub Release workflow.
 
 ### Home dashboard

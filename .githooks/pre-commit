@@ -1,5 +1,0 @@
-#!/bin/sh
-set -eu
-
-# Keep commits fast; the complete suite runs once before push.
-git diff --cached --check
