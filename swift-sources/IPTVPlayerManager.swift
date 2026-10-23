@@ -1151,6 +1151,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     #endif
 
     private func playDirectStream(_ item: M3UItem, useVLC: Bool, position: Double? = nil, preservingDetails: Bool = false, recoveryAttempt: Int = 0) {
+        let sameMedia = currentChannel?.subtitleCacheKey == item.subtitleCacheKey
+        let audioSelection = sameMedia ? audioTracks.playbackSelection : nil
+        let subtitleSelection = sameMedia ? subtitles.playbackSelection : nil
+        defer {
+            if let audioSelection { audioTracks.restoreSelection(audioSelection) }
+            if let subtitleSelection { subtitles.restoreSelection(subtitleSelection) }
+        }
         let archiveOrigin = item.isCatchup == true ? catchupOrigin : nil
         tearDownPlayback(nextItem: item)
         catchupOrigin = archiveOrigin
@@ -2288,7 +2295,7 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
                 if !self.wantsPlayback { player.pause() }
                 if self.errorMessage != nil { self.errorMessage = nil }
                 self.subtitles.nativePlayerDidStart()
-                if self.audioTracks.showingMenu { self.audioTracks.refresh() }
+                self.audioTracks.refresh()
             } else if state == .ended {
                 guard self.wantsPlayback else { return }
                 if self.currentChannel?.contentType == .live, self.wantsPlayback { self.recoverStream(); return }

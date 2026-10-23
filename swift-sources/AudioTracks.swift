@@ -26,12 +26,30 @@ final class AudioTrackController: ObservableObject {
     private weak var item: AVPlayerItem?
     private var group: AVMediaSelectionGroup?
     private var discovery: Task<Void, Never>?
+    private var selectionToRestore: (id: String, name: String)?
     #if os(macOS)
     private weak var player: VLCMediaPlayer?
     #endif
     deinit { discovery?.cancel() }
 
+    var playbackSelection: (id: String, name: String)? {
+        selectionToRestore ?? tracks.first(where: { $0.id == selectedID }).map { ($0.id, $0.name) }
+    }
+
+    func restoreSelection(_ selection: (id: String, name: String)) {
+        selectionToRestore = selection
+        refresh()
+    }
+
+    private func applyRestoredSelection() {
+        guard let selection = selectionToRestore,
+              let track = tracks.first(where: { $0.id == selection.id && $0.name == selection.name })
+                ?? tracks.first(where: { $0.name == selection.name }) else { return }
+        select(track.id)
+    }
+
     func reset() {
+        selectionToRestore = nil
         discovery?.cancel(); discovery = nil
         item = nil; group = nil; tracks = []; selectedID = nil; loading = false; error = nil; showingMenu = false
         #if os(macOS)
@@ -51,6 +69,7 @@ final class AudioTrackController: ObservableObject {
                 AudioTrack(id: "vlc:\($0.1)", name: $0.0, source: .vlc($0.1.int32Value))
             }
             selectedID = "vlc:\(player.currentAudioTrackIndex)"
+            applyRestoredSelection()
             return
         }
         #endif
@@ -70,6 +89,7 @@ final class AudioTrackController: ObservableObject {
                     return false
                 }?.id
                 self.loading = false
+                self.applyRestoredSelection()
             } catch {
                 guard !Task.isCancelled, let self, self.item === item else { return }
                 self.loading = false; self.error = "Audio tracks couldn't be loaded. Try again after playback starts."
@@ -78,6 +98,7 @@ final class AudioTrackController: ObservableObject {
     }
     func select(_ id: String) {
         guard let track = tracks.first(where: { $0.id == id }) else { return }
+        selectionToRestore = nil
         switch track.source {
         case .av(let option):
             guard let item, let group else { return }

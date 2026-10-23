@@ -382,6 +382,91 @@ final class PlaybackProgressTests: XCTestCase {
         }
     }
 
+    @MainActor func testReconnectKeepsAudioImportedSubtitlesAndOffChoiceForBothEngines() async throws {
+        let url = try await alternateAudioMedia()
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("reconnect-\(UUID()).srt")
+        defer { try? FileManager.default.removeItem(at: url); try? FileManager.default.removeItem(at: file) }
+        #if os(macOS)
+        let engines = [false, true]
+        #else
+        let engines = [false]
+        #endif
+        for useVLC in engines {
+            try Data("1\n00:00:00,000 --> 00:00:10,000\nRestored caption\n".utf8).write(to: file)
+            let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+            defer { manager.stop() }
+            let item = media(url: url)
+            manager.playAVKitFixture(item)
+            #if os(macOS)
+            if useVLC { manager.playCurrentStreamWithVLC() }
+            #endif
+            func startVLC() {
+                #if os(macOS)
+                if let player = manager.vlcPlayer {
+                    player.media?.addOption(":vout=dummy")
+                    player.media?.addOption(":aout=dummy")
+                    player.play()
+                }
+                #endif
+            }
+            startVLC()
+            let started = await waitUntil { manager.isPlaying }
+            XCTAssertTrue(started)
+            manager.audioTracks.refresh()
+            let discovered = await waitUntil {
+                if useVLC { manager.audioTracks.refresh() }
+                return manager.audioTracks.tracks.count == 2
+            }
+            XCTAssertTrue(discovered)
+            let alternate = try XCTUnwrap(manager.audioTracks.tracks.last)
+            manager.audioTracks.select(alternate.id)
+            manager.subtitles.importFile(file)
+            manager.retryCurrentStream() // Keep the requested selection even while the file is still loading.
+            startVLC()
+            let loaded = await waitUntil { manager.subtitles.selectedID == file.absoluteString }
+            XCTAssertTrue(loaded)
+            manager.subtitles.setTimingDelay(1.5)
+            // Reconnection must reuse the loaded contents, even if the imported file is no longer available.
+            try FileManager.default.removeItem(at: file)
+            manager.pauseForBackground(now: Date().addingTimeInterval(-120))
+            manager.retryCurrentStream()
+            startVLC()
+            let restored = await waitUntil {
+                manager.isPlaying && manager.audioTracks.selectedID == alternate.id
+                    && manager.subtitles.selectedID == file.absoluteString
+            }
+            XCTAssertTrue(restored)
+            XCTAssertNil(manager.subtitles.errorMessage)
+            XCTAssertEqual(manager.subtitles.timingDelay, 1.5)
+            manager.subtitles.updateTime(2)
+            XCTAssertEqual(manager.subtitles.text, "Restored caption")
+            let selectedAudio = try XCTUnwrap(manager.audioTracks.tracks.first { $0.id == manager.audioTracks.selectedID })
+            switch selectedAudio.source {
+            case .av(let option):
+                let group = try await XCTUnwrap(manager.player).currentItem?.asset.loadMediaSelectionGroup(for: .audible)
+                let audible = try XCTUnwrap(group)
+                let applied = await waitUntil {
+                    manager.player?.currentItem?.currentMediaSelection.selectedMediaOption(in: audible) == option
+                }
+                XCTAssertTrue(applied)
+            #if os(macOS)
+            case .vlc(let index): XCTAssertEqual(manager.vlcPlayer?.currentAudioTrackIndex, index)
+            #endif
+            }
+            manager.subtitles.select(nil)
+            manager.retryCurrentStream()
+            startVLC()
+            let reopened = await waitUntil { manager.isPlaying && !manager.subtitles.isLoadingTracks }
+            XCTAssertTrue(reopened)
+            XCTAssertNil(manager.subtitles.selectedID)
+            XCTAssertTrue(manager.subtitles.tracks.contains { $0.id == file.absoluteString })
+            manager.playAVKitFixture(media(url: url, episode: 2))
+            XCTAssertFalse(manager.subtitles.tracks.contains { $0.id == file.absoluteString })
+            XCTAssertNil(manager.audioTracks.playbackSelection)
+            XCTAssertEqual(manager.subtitles.timingDelay, 0)
+        }
+    }
+
     @MainActor func testShortPauseKeepsConnectionButMissingItemReopensAtBookmark() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }

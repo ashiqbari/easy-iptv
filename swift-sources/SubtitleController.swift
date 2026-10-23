@@ -20,6 +20,10 @@ struct SubtitleTrack: Identifiable {
 
 @MainActor
 final class SubtitleController: NSObject, ObservableObject {
+    struct PlaybackSelection {
+        let track: (id: String, label: String)?
+        let files: [SubtitleSource]
+    }
     @Published private(set) var tracks: [SubtitleTrack] = []
     @Published private(set) var selectedID: String?
     @Published private(set) var text = ""
@@ -40,6 +44,8 @@ final class SubtitleController: NSObject, ObservableObject {
     private var mediaKey: String?
     private var generation = UUID()
     private var selection = UUID()
+    private var requestedID: String?
+    private var selectionToRestore: (id: String, label: String)?
     private var nativeTracksLoaded = false
     private var providerSources: [SubtitleSource]?
     private var usingOfflineSources = false
@@ -76,7 +82,31 @@ final class SubtitleController: NSObject, ObservableObject {
         Task { await cache.cancel() }
     }
 
+    var playbackSelection: PlaybackSelection {
+        let selected = tracks.first { $0.id == (requestedID ?? selectedID) }
+        return PlaybackSelection(track: selectionToRestore ?? selected.map { ($0.id, $0.label) },
+            files: tracks.compactMap { if case .file(let source) = $0.source { return source }; return nil })
+    }
+
+    func restoreSelection(_ selection: PlaybackSelection) {
+        selectionToRestore = selection.track
+        appendTracks(selection.files.map { SubtitleTrack(id: $0.id, label: $0.label, source: .file($0)) })
+    }
+
+    private func applyRestoredSelection() {
+        guard let selection = selectionToRestore else { return }
+        let native = selection.id.hasPrefix("av:") || selection.id.hasPrefix("vlc:")
+        guard let track = tracks.first(where: { $0.id == selection.id && $0.label == selection.label })
+            ?? tracks.first(where: {
+                if case .file = $0.source { return false }
+                return native && $0.label == selection.label
+            }) else { return }
+        select(track.id)
+    }
+
     func reset(for item: M3UItem?) {
+        requestedID = nil
+        selectionToRestore = nil
         generation = UUID()
         selection = UUID()
         nativeAttempt = UUID()
@@ -254,6 +284,7 @@ final class SubtitleController: NSObject, ObservableObject {
     private func appendTracks(_ available: [SubtitleTrack]) {
         var ids = Set(tracks.map(\.id))
         tracks += available.filter { ids.insert($0.id).inserted }
+        applyRestoredSelection()
     }
 
     private func refreshDiscoveryState() {
@@ -262,6 +293,8 @@ final class SubtitleController: NSObject, ObservableObject {
     }
 
     func select(_ id: String?) {
+        selectionToRestore = nil
+        requestedID = id
         selection = UUID()
         let selectionToken = selection
         fileSelection?.cancel()
