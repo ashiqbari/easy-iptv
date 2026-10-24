@@ -146,6 +146,47 @@ final class DownloadTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(server.count("/live.mov"), 3)
     }
 
+    func testVLCMovieAndEpisodeRecoverAfterNetworkSeek() async throws {
+        let media = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: media) }
+        let server = try DownloadHTTPFixture()
+        server.media = try Data(contentsOf: media)
+        server.acceptsRanges = true
+        try await server.start()
+        server.release("/seek.mov")
+        defer { server.stop() }
+        for type in [M3UItem.ContentType.movie, .series] {
+            let suite = "seek-recovery-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+            let manager = IPTVPlayerManager(progressDefaults: defaults)
+            defer { manager.stop(); defaults.removePersistentDomain(forName: suite) }
+            let surface = VLCVideoSurfaceNSView()
+            func attach() {
+                guard let player = manager.vlcPlayer else { return }
+                player.media?.addOption(":aout=dummy")
+                player.media?.addOption(":vout=dummy")
+                surface.update(player: player, shouldPlay: !manager.isWaitingToReconnect, screenSize: .auto)
+            }
+            let item = M3UItem(name: "Seek fixture", streamURL: server.url("/seek.mov"), contentType: type)
+            manager.playDirectStream(item)
+            try await wait { attach(); return manager.isPlaying && manager.duration > 0 }
+            manager.seek(to: 80)
+            manager.seekBy(seconds: 10)
+            manager.seekBy(seconds: 10)
+            try await wait { abs(Double(manager.vlcPlayer?.time.intValue ?? 0) / 1000 - 100) < 2 }
+            let old = try XCTUnwrap(manager.vlcPlayer)
+            manager.isSeeking = true // Recovery can replace the scrubber before its editing-ended callback.
+            manager.recoverStream()
+            try await wait { attach(); return manager.vlcPlayer !== old && manager.isPlaying && abs(Double(manager.vlcPlayer?.time.intValue ?? 0) / 1000 - 100) < 3 }
+            try await Task.sleep(nanoseconds: 1_500_000_000)
+            XCTAssertGreaterThan(Double(manager.vlcPlayer?.time.intValue ?? 0) / 1000, 100)
+            XCTAssertFalse(manager.isSeeking)
+            XCTAssertGreaterThan(manager.currentTime, 100)
+            XCTAssertEqual(manager.vlcPlayer?.audio?.volume, Int32((manager.playbackVolume * 100).rounded()))
+            XCTAssertNil(manager.recoveryMessage)
+            XCTAssertNil(manager.errorMessage)
+        }
+    }
+
     #endif
 
     func testQueueLimitDuplicateClicksPauseResumeAndAutomaticAdvance() async throws {

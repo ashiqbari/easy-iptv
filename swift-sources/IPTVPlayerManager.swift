@@ -1405,6 +1405,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         if nextItem == nil { controlsInteractionHolds.removeAll() }
         cancelControlsAutoHide()
         saveProgress(force: true)
+        isSeeking = false
         pausedPlaybackPosition = nil
         wantsPlayback = false
         pendingResumePosition = nil
