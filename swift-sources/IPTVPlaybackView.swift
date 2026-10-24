@@ -284,7 +284,7 @@ public struct IPTVPlaybackView: View {
                     if let player = manager.vlcPlayer {
                         VLCVideoSurface(
                             player: player,
-                            shouldPlay: manager.isPlaying || manager.isBuffering,
+                            shouldPlay: !manager.isWaitingToReconnect && (manager.isPlaying || manager.isBuffering),
                             screenSize: manager.screenSize, pictureInPicture: manager.pictureInPicture
                         )
                             .ignoresSafeArea()

@@ -16,6 +16,7 @@ private final class DownloadHTTPFixture: @unchecked Sendable {
     private var connections: [NWConnection] = []
     private var hits: [String: Int] = [:]
     private var released = Set<String>()
+    var acceptsRanges = false
     var media = Data(repeating: 0x41, count: 64 * 1024)
     let subtitle = Data("1\n00:00:00,000 --> 00:05:00,000\nOffline subtitle\n".utf8)
     private var port: NWEndpoint.Port!
@@ -61,13 +62,21 @@ private final class DownloadHTTPFixture: @unchecked Sendable {
             let ready = self.released.contains(path) || path.contains("subtitle") || path.contains("invalid")
             if !ready { self.waiting[path] = connection }
             self.lock.unlock()
-            if ready { self.send(connection, path: path) }
+            let range = request.components(separatedBy: "\r\n").first { $0.lowercased().hasPrefix("range: bytes=") }?.dropFirst(13)
+            if ready { self.send(connection, path: path, range: range.map(String.init)) }
         }
     }
-    private func send(_ connection: NWConnection, path: String) {
+    private func send(_ connection: NWConnection, path: String, range: String? = nil) {
         let invalid = path.contains("invalid"), subtitle = path.contains("subtitle")
         let body = invalid ? Data("<html>Login required</html>".utf8) : subtitle ? self.subtitle : media
         let type = invalid ? "text/html" : subtitle ? "text/plain" : "video/mp4"
+        if acceptsRanges, let range, let start = Int(range.split(separator: "-", omittingEmptySubsequences: false).first ?? ""), start < body.count {
+            let end = min(Int(range.split(separator: "-", omittingEmptySubsequences: false).last ?? "") ?? (body.count - 1), body.count - 1)
+            var response = Data("HTTP/1.1 206 Partial Content\r\nContent-Type: \(type)\r\nContent-Range: bytes \(start)-\(end)/\(body.count)\r\nContent-Length: \(end - start + 1)\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n".utf8)
+            response.append(body[start...end])
+            connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
+            return
+        }
         var response = Data("HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8)
         response.append(body)
         connection.send(content: response, completion: .contentProcessed { _ in connection.cancel() })
@@ -91,6 +100,53 @@ final class DownloadTests: XCTestCase {
                 contentType: episode == nil ? .movie : .series, mediaID: name, seriesID: episode == nil ? nil : "42",
                 seasonNumber: episode == nil ? nil : 1, episodeNumber: episode)
     }
+
+    #if os(macOS)
+    func testLiveVLCRecoveryClosesOldConnectionBeforeRetry() async throws {
+        let media = try await alternateAudioMedia()
+        defer { try? FileManager.default.removeItem(at: media) }
+        let server = try DownloadHTTPFixture()
+        server.media = try Data(contentsOf: media)
+        server.acceptsRanges = true
+        try await server.start()
+        server.release("/live.mov")
+        let suite = "live-reconnect-\(UUID())", defaults = UserDefaults(suiteName: suite)!
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        let surface = VLCVideoSurfaceNSView()
+        func attach() {
+            guard let player = manager.vlcPlayer else { return }
+            player.media?.addOption(":aout=dummy")
+            player.media?.addOption(":vout=dummy")
+            surface.update(player: player, shouldPlay: !manager.isWaitingToReconnect, screenSize: .auto)
+        }
+        defer { manager.stop(); server.stop(); defaults.removePersistentDomain(forName: suite) }
+        let channel = M3UItem(name: "Live fixture", streamURL: server.url("/live.mov"), contentType: .live)
+        manager.playChannel(channel)
+        try await wait { attach(); return manager.isPlaying }
+        let first = try XCTUnwrap(manager.vlcPlayer)
+        manager.updatePlaybackState(playing: false, buffering: true)
+        manager.recoverStream()
+        let replacementSurface = VLCVideoSurfaceNSView()
+        replacementSurface.update(player: first, shouldPlay: !manager.isWaitingToReconnect, screenSize: .auto)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertTrue(manager.vlcPlayer === first, "The retry delay must precede the new connection")
+        XCTAssertEqual(first.state, .stopped, "Close the old connection during backoff, before opening its replacement")
+        for _ in 0..<800 {
+            attach()
+            if manager.vlcPlayer !== first && manager.isPlaying { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertFalse(manager.vlcPlayer === first)
+        XCTAssertTrue(manager.isPlaying)
+        XCTAssertNil(manager.recoveryMessage)
+        let replacement = try XCTUnwrap(manager.vlcPlayer)
+        manager.retryCurrentStream()
+        try await wait { attach(); return manager.isPlaying && manager.vlcPlayer !== replacement }
+        XCTAssertEqual(manager.currentChannel?.id, channel.id)
+        XCTAssertGreaterThanOrEqual(server.count("/live.mov"), 3)
+    }
+
+    #endif
 
     func testQueueLimitDuplicateClicksPauseResumeAndAutomaticAdvance() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("downloads-\(UUID())")

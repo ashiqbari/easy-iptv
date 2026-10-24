@@ -150,6 +150,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
     @Published private(set) var recoveryMessage: String?
     private var recoveryTask: Task<Void, Never>?
+    var isWaitingToReconnect: Bool { recoveryTask != nil }
     private var stallTask: Task<Void, Never>?
     private var stablePlaybackTask: Task<Void, Never>?
     private var playbackGeneration = UUID()
@@ -2021,6 +2022,15 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     func recoverStream() {
         guard recoveryTask == nil, wantsPlayback, let channel = currentChannel,
               ["http", "https"].contains(channel.streamURL.scheme?.lowercased() ?? ""), downloads.localURL(for: channel) == nil else { return }
+        if channel.contentType == .live {
+            // Give the failed connection the retry delay to close before opening another provider session.
+            player?.pause()
+            player?.replaceCurrentItem(with: nil)
+            #if os(macOS)
+            vlcPlayer?.stop()
+            #endif
+            isPlaying = false
+        }
         guard let delay = Self.recoveryDelay(after: recoveryAttempts) else {
             recoveryMessage = nil; isBuffering = false; isPlaying = false
             errorMessage = "Could not reconnect after three attempts. Try again or choose another channel."
@@ -2306,7 +2316,7 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
         let playing = player.isPlaying
         Task { @MainActor [weak self] in
             guard let self else { return }
-            guard self.vlcPlayer === player else { return }
+            guard self.vlcPlayer === player, self.recoveryTask == nil else { return }
             self.updatePlaybackState(playing: self.wantsPlayback && playing,
                                      buffering: self.wantsPlayback && (state == .opening || (state == .buffering && !playing)))
             if state == .error {
@@ -2343,7 +2353,7 @@ extension IPTVPlayerManager: VLCMediaPlayerDelegate {
         let total = Double(player.media?.length.intValue ?? 0) / 1000
         let playing = player.isPlaying
         Task { @MainActor [weak self] in
-            guard let self, self.vlcPlayer === player, !self.isSeeking else { return }
+            guard let self, self.vlcPlayer === player, self.recoveryTask == nil, !self.isSeeking else { return }
             self.updatePlaybackClock(position: current, duration: total)
             // VLC can resume its clock while its last state notification still says buffering.
             self.updatePlaybackState(playing: self.wantsPlayback && playing,
