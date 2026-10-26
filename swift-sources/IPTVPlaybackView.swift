@@ -256,7 +256,7 @@ private struct EpisodePositions: PreferenceKey {
     }
 }
 #if os(macOS)
-import VLC
+import SwiftVLC
 import AppKit
 #endif
 
@@ -281,12 +281,13 @@ public struct IPTVPlaybackView: View {
             Group {
 #if os(macOS)
                 if manager.useVLCPlayback {
-                    if let player = manager.vlcPlayer {
+                    if let player = manager.vlcPlayer, let surface = manager.vlcVideoSurface {
                         VLCVideoSurface(
+                            surface: surface,
                             player: player,
-                            shouldPlay: !manager.isWaitingToReconnect && (manager.isPlaying || manager.isBuffering),
                             screenSize: manager.screenSize, pictureInPicture: manager.pictureInPicture
                         )
+                            .id(ObjectIdentifier(player))
                             .ignoresSafeArea()
                             .overlay {
                                 Color.clear
@@ -1901,7 +1902,7 @@ public struct AVPlayerLayerRepresentable: NSViewRepresentable {
     }
 }
 
-/// AppKit surface that attaches a VLCMediaPlayer to a native view.
+/// AppKit surface that attaches a SwiftVLC.Player to a native view.
 struct PlaybackDiagnosticsView: View {
     @ObservedObject var manager: IPTVPlayerManager
     @State private var report = "Reading playback statistics…"
@@ -1926,9 +1927,8 @@ struct PlaybackDiagnosticsView: View {
                 while !Task.isCancelled {
                     let now = ProcessInfo.processInfo.systemUptime
                     let elapsed = now - sampledAt
-                    if manager.useVLCPlayback, let player = manager.vlcPlayer, let media = player.media {
-                        let stats = media.statistics
-                        let size = player.videoSize
+                    if manager.useVLCPlayback, let player = manager.vlcPlayer, let stats = player.statistics {
+                        let size = player.videoSize ?? .zero
                         let fps = Self.rate(current: Int(stats.displayedPictures), previous: frames, elapsed: elapsed)
                         let throughput = Self.rate(current: Int(stats.readBytes), previous: bytes, elapsed: elapsed).map { $0 * 8 / 1_000_000 }
                         report = "VLC · \(Int(size.width))×\(Int(size.height))\nDisplayed FPS: \(fps.map { String(format: "%.1f", $0) } ?? "—") · Lost frames: \(stats.lostPictures)\nInput: \(throughput.map { String(format: "%.2f Mbps", $0) } ?? "—")\nBuffer: \(manager.isBuffering ? "buffering" : "not buffering") (seconds unavailable)"
@@ -1950,11 +1950,9 @@ struct PlaybackDiagnosticsView: View {
 }
 
 final class VLCVideoSurfaceNSView: NSView {
-    private weak var player: VLCMediaPlayer?
+    private weak var player: SwiftVLC.Player?
+    private var host: NSHostingView<SwiftVLC.VideoView>?
     private var screenSize: VideoScreenSize = .auto
-    private var appliedAspect: String?
-    private var appliedCrop: String?
-    private var hasAppliedSettings = false
 
     init() {
         super.init(frame: .zero)
@@ -1963,14 +1961,18 @@ final class VLCVideoSurfaceNSView: NSView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func update(player: VLCMediaPlayer, shouldPlay: Bool, screenSize: VideoScreenSize) {
-        let attaching = (player.drawable as? NSView) !== self
-        if self.player !== player { hasAppliedSettings = false }
-        self.player = player
+    func update(player: SwiftVLC.Player, screenSize: VideoScreenSize) {
+        if self.player !== player {
+            self.player = player
+            host?.removeFromSuperview()
+            let host = NSHostingView(rootView: SwiftVLC.VideoView(player))
+            host.frame = bounds
+            host.autoresizingMask = [.width, .height]
+            addSubview(host)
+            self.host = host
+        }
         self.screenSize = screenSize
-        if attaching { player.drawable = self }
         applyScreenSize()
-        if attaching && shouldPlay && !player.isPlaying && !player.willPlay { player.play() }
     }
 
     override func layout() {
@@ -1980,42 +1982,35 @@ final class VLCVideoSurfaceNSView: NSView {
 
     private func applyScreenSize() {
         guard let player, bounds.width > 0, bounds.height > 0 else { return }
-        let areaRatio = "\(max(1, Int(bounds.width.rounded()))):\(max(1, Int(bounds.height.rounded())))"
-        let aspect = screenSize.ratio != nil ? screenSize.title : screenSize == .stretch ? areaRatio : nil
-        let crop = screenSize == .zoom ? areaRatio : nil
-        if !hasAppliedSettings || aspect != appliedAspect {
-            if let aspect {
-                var bytes = Array(aspect.utf8CString)
-                bytes.withUnsafeMutableBufferPointer { player.videoAspectRatio = $0.baseAddress }
-            } else { player.videoAspectRatio = nil }
-            appliedAspect = aspect
+        let aspect: SwiftVLC.AspectRatio
+        switch screenSize {
+        case .auto: aspect = .default
+        case .widescreen: aspect = .ratio(16, 9)
+        case .standard: aspect = .ratio(4, 3)
+        case .ultrawide: aspect = .ratio(21, 9)
+        case .square: aspect = .ratio(1, 1)
+        case .stretch: aspect = .ratio(max(1, Int(bounds.width.rounded())), max(1, Int(bounds.height.rounded())))
+        case .zoom: aspect = .fill
         }
-        if !hasAppliedSettings || crop != appliedCrop {
-            if let crop {
-                var bytes = Array(crop.utf8CString)
-                bytes.withUnsafeMutableBufferPointer { player.videoCropGeometry = $0.baseAddress }
-            } else { player.videoCropGeometry = nil }
-            appliedCrop = crop
-        }
-        hasAppliedSettings = true
+        if player.aspectRatio != aspect { player.aspectRatio = aspect }
     }
 }
 
 private struct VLCVideoSurface: NSViewRepresentable {
-    let player: VLCMediaPlayer
-    let shouldPlay: Bool
+    let surface: VLCVideoSurfaceNSView
+    let player: SwiftVLC.Player
     let screenSize: VideoScreenSize
     let pictureInPicture: PictureInPictureCoordinator
 
     func makeNSView(context: Context) -> PictureInPictureVideoContainer {
-        let container = PictureInPictureVideoContainer(surface: VLCVideoSurfaceNSView())
+        let container = PictureInPictureVideoContainer(surface: surface)
         updateNSView(container, context: context)
         return container
     }
 
     func updateNSView(_ container: PictureInPictureVideoContainer, context: Context) {
         guard let surface = container.surface as? VLCVideoSurfaceNSView else { return }
-        surface.update(player: player, shouldPlay: shouldPlay, screenSize: screenSize)
+        surface.update(player: player, screenSize: screenSize)
         pictureInPicture.attachSurface(surface, home: container)
     }
 }

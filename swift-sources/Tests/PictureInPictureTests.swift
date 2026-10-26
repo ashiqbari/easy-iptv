@@ -2,7 +2,7 @@ import XCTest
 import AVKit
 import SwiftUI
 #if os(macOS)
-import VLC
+import SwiftVLC
 import AppKit
 #endif
 @testable import EasyIPTV
@@ -86,8 +86,8 @@ final class PictureInPictureTests: XCTestCase {
         defer { fixture.cleanUp() }
         let manager = fixture.manager
         let original = try XCTUnwrap(manager.vlcPlayer)
-        let drawable = try XCTUnwrap(original.drawable as? NSView)
-        let time = original.time.intValue
+        let drawable = try XCTUnwrap(vlcSurface(in: manager.pictureInPicture.floatingWindow?.contentView ?? fixture.hosting))
+        let time = original.currentTime.secondsValue
         manager.browse(.movie)
         manager.selectedCategory = "Favorites"
         manager.pictureInPicture.reconcile()
@@ -96,7 +96,7 @@ final class PictureInPictureTests: XCTestCase {
         manager.showMovieDetails(M3UItem(name: "Other", streamURL: fixture.url, contentType: .movie))
         try await fixture.wait { manager.pictureInPicture.isActive }
         XCTAssertTrue(manager.vlcPlayer === original)
-        XCTAssertTrue(original.drawable as? NSView === drawable)
+        XCTAssertTrue(vlcSurface(in: manager.pictureInPicture.floatingWindow?.contentView ?? fixture.hosting) === drawable)
         XCTAssertTrue(drawable.window === manager.pictureInPicture.floatingWindow)
         manager.showMovieDetails(M3UItem(name: "Other", streamURL: fixture.url, contentType: .movie))
         manager.pictureInPicture.reconcile()
@@ -108,8 +108,8 @@ final class PictureInPictureTests: XCTestCase {
         XCTAssertTrue(manager.pictureInPicture.isActive, "Section/category browsing must keep PiP active")
         XCTAssertTrue(drawable.window === manager.pictureInPicture.floatingWindow)
         XCTAssertTrue(manager.vlcPlayer === original)
-        XCTAssertTrue(original.drawable as? NSView === drawable)
-        XCTAssertGreaterThanOrEqual(original.time.intValue, time)
+        XCTAssertTrue(vlcSurface(in: manager.pictureInPicture.floatingWindow?.contentView ?? fixture.hosting) === drawable)
+        XCTAssertGreaterThanOrEqual(original.currentTime.secondsValue, time)
         XCTAssertTrue(manager.isPlaying)
         manager.pictureInPicture.restorePlayer()
         XCTAssertFalse(manager.pictureInPicture.isActive)
@@ -369,7 +369,7 @@ final class PictureInPictureTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = hosting
         try await wait {
-            let clock = self.manager.vlcPlayer.map { Double($0.time.intValue) / 1000 } ?? self.manager.player?.currentTime().seconds ?? 0
+            let clock = self.manager.vlcPlayer.map { $0.currentTime.secondsValue } ?? self.manager.player?.currentTime().seconds ?? 0
             return self.manager.isPlaying && clock > 0 && self.manager.pictureInPicture.isPossible
         }
     }

@@ -1,14 +1,14 @@
 import SwiftUI
 import AVFoundation
 #if os(macOS)
-import VLC
+import SwiftVLC
 #endif
 
 struct AudioTrack: Identifiable {
     enum Source {
         case av(AVMediaSelectionOption)
         #if os(macOS)
-        case vlc(Int32)
+        case vlc(SwiftVLC.Track)
         #endif
     }
     let id: String
@@ -28,7 +28,7 @@ final class AudioTrackController: ObservableObject {
     private var discovery: Task<Void, Never>?
     private var selectionToRestore: (id: String, name: String)?
     #if os(macOS)
-    private weak var player: VLCMediaPlayer?
+    private weak var player: SwiftVLC.Player?
     #endif
     deinit { discovery?.cancel() }
 
@@ -58,17 +58,15 @@ final class AudioTrackController: ObservableObject {
     }
     func configure(_ item: AVPlayerItem) { reset(); self.item = item }
     #if os(macOS)
-    func configure(_ player: VLCMediaPlayer) { reset(); self.player = player }
+    func configure(_ player: SwiftVLC.Player) { reset(); self.player = player }
     #endif
     func refresh() {
         #if os(macOS)
         if let player {
-            let names = player.audioTrackNames as? [String] ?? []
-            let ids = player.audioTrackIndexes as? [NSNumber] ?? []
-            tracks = zip(names, ids).filter { $0.1.int32Value >= 0 }.map {
-                AudioTrack(id: "vlc:\($0.1)", name: $0.0, source: .vlc($0.1.int32Value))
+            tracks = player.audioTracks.map {
+                AudioTrack(id: "vlc:\($0.id)", name: $0.name, source: .vlc($0))
             }
-            selectedID = "vlc:\(player.currentAudioTrackIndex)"
+            selectedID = player.selectedAudioTrack.map { "vlc:\($0.id)" }
             applyRestoredSelection()
             return
         }
@@ -106,7 +104,7 @@ final class AudioTrackController: ObservableObject {
         #if os(macOS)
         case .vlc(let index):
             guard let player else { return }
-            player.currentAudioTrackIndex = index
+            player.selectedAudioTrack = index
         #endif
         }
         selectedID = id

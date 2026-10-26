@@ -11,7 +11,7 @@ import Combine
 import MediaPlayer
 import SwiftUI
 #if os(macOS)
-import VLC
+import SwiftVLC
 #endif
 #if os(macOS)
 import IOKit.pwr_mgt
@@ -152,6 +152,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     private var recoveryTask: Task<Void, Never>?
     var isWaitingToReconnect: Bool { recoveryTask != nil }
     private var stallTask: Task<Void, Never>?
+    private var liveProgressTask: Task<Void, Never>?
+    private var lastLiveProgress: (position: Double, time: TimeInterval)?
     private var stablePlaybackTask: Task<Void, Never>?
     private var playbackGeneration = UUID()
     private(set) var recoveryAttempts = 0
@@ -581,12 +583,12 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     #if os(macOS)
     /// VLC playback instance used for streams AVPlayer cannot decode.
-    @Published public private(set) var vlcPlayer: VLCMediaPlayer? {
+    @Published public private(set) var vlcPlayer: SwiftVLC.Player? {
         didSet { cleanupVLCPlayer = vlcPlayer }
     }
-    private var cleanupVLCPlayer: VLCMediaPlayer?
-    // App volume is persisted separately; VLC's volume saving can deadlock its global config lock during channel switches.
-    private static let playbackLibrary = VLCLibrary(options: ["--no-volume-save"])
+    private var cleanupVLCPlayer: SwiftVLC.Player?
+    private var vlcEventTask: Task<Void, Never>?
+    private(set) var vlcVideoSurface: VLCVideoSurfaceNSView?
     #endif
     
     // MARK: - Private Members
@@ -686,9 +688,13 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             MPNowPlayingInfoCenter.default().playbackState = .stopped
             #endif
         }
+        #if os(macOS)
+        vlcEventTask?.cancel()
+        #endif
         libraryFilterTask?.cancel()
         recoveryTask?.cancel()
         stallTask?.cancel()
+        liveProgressTask?.cancel()
         stablePlaybackTask?.cancel()
         foregroundLibraryTask?.cancel()
         backgroundLibraryTask?.cancel()
@@ -707,7 +713,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         cleanupPlayer?.replaceCurrentItem(with: nil)
         #if os(macOS)
         if let vlcPlayer = cleanupVLCPlayer {
-            Task { @MainActor in VLCPlaybackRetirement.shared.retire(vlcPlayer) }
+            Task { @MainActor in await vlcPlayer.shutdown() }
         }
         sleepManager.disable()
         #endif
@@ -1198,6 +1204,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         self.isBuffering = true
         self.currentTime = 0.0
         self.duration = 0.0
+        watchLiveProgress()
 
         #if os(macOS)
         if useVLC {
@@ -1261,25 +1268,48 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         removeTimeObserver()
         playerItemStatusObserver?.invalidate()
         playerTimeControlObserver?.invalidate()
-        let vlc = VLCMediaPlayer(library: Self.playbackLibrary)
-        vlc.delegate = self
+        let vlc = SwiftVLC.Player()
         let localURL = downloads.localURL(for: item)
         if localURL == nil, !downloads.isOnline {
             errorMessage = "You're offline. Open Downloads to watch saved movies and episodes."
             isBuffering = false; isPlaying = false
             return
         }
-        vlc.media = VLCMedia(url: localURL ?? item.streamURL)
+        do {
+            vlc.load(try SwiftVLC.Media(url: localURL ?? item.streamURL))
+        } catch {
+            isBuffering = false
+            errorMessage = "Could not open this stream. \(error.localizedDescription)"
+            return
+        }
+        // Attach the video output before decoding starts, even before the playback view appears.
+        let surface = VLCVideoSurfaceNSView()
+        surface.frame = CGRect(x: 0, y: 0, width: 640, height: 360)
+        surface.update(player: vlc, screenSize: screenSize)
+        surface.layoutSubtreeIfNeeded()
+        vlcVideoSurface = surface
         vlcPlayer = vlc
         audioTracks.configure(vlc)
         if item.isVOD {
             subtitles.configure(player: vlc, provider: subtitleProvider(for: item), offlineSources: localURL == nil ? nil : (downloads.record(for: item)?.subtitles ?? []))
         }
-        vlc.audio?.volume = pendingResumePosition == nil ? Int32((playbackVolume * 100).rounded()) : 0
+        applyVLCVolume(vlc)
         useVLCPlayback = true
         errorMessage = nil
         isBuffering = true
         isPlaying = false
+        let events = vlc.events
+        vlcEventTask = Task { @MainActor [weak self, weak vlc] in
+            for await event in events {
+                guard !Task.isCancelled, let self, let vlc, self.vlcPlayer === vlc else { return }
+                self.handleVLCEvent(event, player: vlc)
+            }
+        }
+        do { try vlc.play() }
+        catch {
+            errorMessage = "Could not start this stream. \(error.localizedDescription)"
+            recoverStream()
+        }
         if pendingResumePosition != nil {
             resumeTimeoutTask = Task { @MainActor [weak self, weak vlc] in
                 try? await Task.sleep(nanoseconds: 20_000_000_000)
@@ -1287,11 +1317,19 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                       self.pendingResumePosition != nil else { return }
                 self.wantsPlayback = false
                 vlc.pause()
-                vlc.audio?.volume = Int32((self.playbackVolume * 100).rounded())
+                self.applyVLCVolume(vlc, muted: false)
                 self.isPlaying = false
                 self.isBuffering = false
                 self.errorMessage = "This stream could not resume at the saved position. Try again, switch player, or choose Start over."
             }
+        }
+    }
+
+    private func applyVLCVolume(_ player: SwiftVLC.Player, muted: Bool? = nil) {
+        do { try player.setAudioVolume(Volume((muted ?? (pendingResumePosition != nil)) ? 0 : playbackVolume)) }
+        catch {
+            // Video-only inputs have no audio output to accept volume changes.
+            if !player.audioTracks.isEmpty { errorMessage = "Could not set playback volume. \(error.localizedDescription)" }
         }
     }
 
@@ -1300,8 +1338,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             useVLCPlayback = false
             return
         }
-        VLCPlaybackRetirement.shared.retire(previous)
+        vlcEventTask?.cancel(); vlcEventTask = nil
+        previous.stop()
+        Task { await previous.shutdown() }
         vlcPlayer = nil
+        vlcVideoSurface = nil
         useVLCPlayback = false
     }
     #endif
@@ -1379,7 +1420,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 
     private func enginePlaybackPosition() -> Double {
         #if os(macOS)
-        if let vlcPlayer, useVLCPlayback { return max(0, Double(vlcPlayer.time.intValue) / 1000) }
+        if let vlcPlayer, useVLCPlayback { return max(0, vlcPlayer.currentTime.secondsValue) }
         #endif
         let seconds = player?.currentTime().seconds ?? currentTime
         return seconds.isFinite ? max(0, seconds) : currentTime
@@ -1580,7 +1621,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         defer { updateRemoteNowPlaying() }
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer {
-            vlcPlayer.time = VLCTime(int: Int32(max(0, min(seconds * 1000, Double(Int32.max)))))
+            do { try vlcPlayer.seek(to: .seconds(max(0, seconds))) }
+            catch { errorMessage = "Could not seek in this stream. \(error.localizedDescription)"; return }
             currentTime = seconds
             return
         }
@@ -1597,7 +1639,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         if currentChannel?.contentType == .live {
             var liveDuration = player?.currentItem?.duration.seconds ?? 0
             #if os(macOS)
-            if useVLCPlayback { liveDuration = Double(vlcPlayer?.media?.length.intValue ?? 0) / 1000 }
+            if useVLCPlayback { liveDuration = vlcPlayer?.duration?.secondsValue ?? 0 }
             #endif
             if liveDuration.isFinite, liveDuration > 0 { maxDur = liveDuration }
         }
@@ -1669,7 +1711,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         storageDefaults.set(playbackVolume, forKey: "com.iptvplayer.playbackVolume")
         player?.volume = playbackVolume
         #if os(macOS)
-        vlcPlayer?.audio?.volume = pendingResumePosition == nil ? Int32((playbackVolume * 100).rounded()) : 0
+        if let vlcPlayer { applyVLCVolume(vlcPlayer) }
         #endif
     }
     
@@ -1688,10 +1730,18 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         cancelStreamRecovery()
         wantsPlayback = true
         playbackFinished = false
+        watchLiveProgress()
         if pausedPlaybackPosition != nil { watchForResume() }
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer {
-            vlcPlayer.play()
+            if vlcPlayer.isActive || vlcPlayer.state == .paused {
+                vlcPlayer.resume()
+                updatePlaybackState(playing: vlcPlayer.state == .playing,
+                                    buffering: vlcPlayer.state == .opening || vlcPlayer.state == .buffering)
+            } else {
+                do { try vlcPlayer.play() }
+                catch { errorMessage = "Could not resume this stream. \(error.localizedDescription)"; recoverStream() }
+            }
             return
         }
         #endif
@@ -1967,6 +2017,8 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         resumePlaybackTask?.cancel(); resumePlaybackTask = nil
         recoveryTask?.cancel(); recoveryTask = nil
         stallTask?.cancel(); stallTask = nil
+        liveProgressTask?.cancel(); liveProgressTask = nil
+        lastLiveProgress = nil
         stablePlaybackTask?.cancel(); stablePlaybackTask = nil
         recoveryMessage = nil; recoveryAttempts = 0
     }
@@ -1997,6 +2049,33 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
                                   preservingDetails: self.isViewingMovieDetails || self.isViewingSeriesDetails)
         }
     }
+    private func watchLiveProgress() {
+        liveProgressTask?.cancel()
+        guard let channel = currentChannel, !channel.isVOD,
+              ["http", "https"].contains(channel.streamURL.scheme?.lowercased() ?? "") else { return }
+        lastLiveProgress = (enginePlaybackPosition(), ProcessInfo.processInfo.systemUptime)
+        let generation = playbackGeneration
+        liveProgressTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled, let self, self.playbackGeneration == generation,
+                      self.wantsPlayback else { return }
+                self.checkLiveProgress(position: self.enginePlaybackPosition(), at: ProcessInfo.processInfo.systemUptime)
+            }
+        }
+    }
+
+    func checkLiveProgress(position: Double, at time: TimeInterval) {
+        guard wantsPlayback, let channel = currentChannel, !channel.isVOD,
+              recoveryTask == nil, errorMessage == nil, let previous = lastLiveProgress else { return }
+        // Engines can remain "playing" after a connection dies; trust clock movement instead.
+        if position.isFinite, abs(position - previous.position) > 0.1 {
+            lastLiveProgress = (position, time)
+        } else if time - previous.time >= 20 {
+            recoverStream()
+        }
+    }
+
     private func watchForStall() {
         stallTask?.cancel()
         let generation = playbackGeneration
@@ -2291,79 +2370,79 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
 }
 
 #if os(macOS)
-extension IPTVPlayerManager: VLCMediaPlayerDelegate {
-    private func applyPendingVLCResume(_ player: VLCMediaPlayer) {
+extension IPTVPlayerManager {
+    private func applyPendingVLCResume(_ player: SwiftVLC.Player) {
         guard let position = pendingResumePosition else { return }
         if vlcResumeSeekIssued {
-            // libvlc's set_time is asynchronous: don't save zero or unmute until
-            // the engine reports that the requested position actually took effect.
-            guard abs(Double(player.time.intValue) / 1000 - position) < 2 else { return }
+            guard abs(player.currentTime.secondsValue - position) < 2 else { return }
             pendingResumePosition = nil
             resumeTimeoutTask?.cancel()
             resumeTimeoutTask = nil
-            player.audio?.volume = Int32((playbackVolume * 100).rounded())
+            applyVLCVolume(player)
             if !wantsPlayback { player.pause() }
         } else if let target = Self.vlcResumeTime(position: position, seekable: player.isSeekable,
-                                                duration: Double(player.media?.length.intValue ?? 0) / 1000) {
-            vlcResumeSeekIssued = true
-            pendingResumePosition = Double(target) / 1000
-            player.time = VLCTime(int: target)
-        }
-    }
-
-    nonisolated public func mediaPlayerStateChanged(_ notification: Notification) {
-        guard let player = notification.object as? VLCMediaPlayer else { return }
-        let state = player.state
-        let playing = player.isPlaying
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard self.vlcPlayer === player, self.recoveryTask == nil else { return }
-            self.updatePlaybackState(playing: self.wantsPlayback && playing,
-                                     buffering: self.wantsPlayback && (state == .opening || (state == .buffering && !playing)))
-            if state == .error {
-                self.isBuffering = false
-                self.errorMessage = "VLC could not play this stream. Check the stream URL or try another channel."
-                self.recoverStream()
-            } else if state == .playing {
-                self.applyPendingVLCResume(player)
-                self.recordPlaybackStarted()
-                if !self.wantsPlayback { player.pause() }
-                if self.errorMessage != nil { self.errorMessage = nil }
-                self.subtitles.nativePlayerDidStart()
-                self.audioTracks.refresh()
-            } else if state == .ended {
-                guard self.wantsPlayback else { return }
-                if self.currentChannel?.contentType == .live, self.wantsPlayback { self.recoverStream(); return }
-                if self.resumePlaybackTask != nil,
-                   self.enginePlaybackPosition() <= (self.pausedPlaybackPosition ?? 0) + 0.1 {
-                    self.recoverStream()
-                    return
-                }
-                self.pausedPlaybackPosition = nil
-                self.cancelStreamRecovery()
-                self.saveProgress(force: true, completed: true)
-                self.playbackFinished = true
-                self.wantsPlayback = false
+                                                duration: player.duration?.secondsValue ?? 0) {
+            do {
+                try player.seek(to: .milliseconds(Int64(target)))
+                vlcResumeSeekIssued = true
+                pendingResumePosition = Double(target) / 1000
+            } catch {
+                wantsPlayback = false
+                player.pause()
+                applyVLCVolume(player, muted: false)
+                isPlaying = false
+                isBuffering = false
+                errorMessage = "Could not resume at the saved position. Try again or choose Start over."
             }
         }
     }
 
-    nonisolated public func mediaPlayerTimeChanged(_ notification: Notification) {
-        guard let player = notification.object as? VLCMediaPlayer else { return }
-        let current = Double(player.time.intValue) / 1000
-        let total = Double(player.media?.length.intValue ?? 0) / 1000
-        let playing = player.isPlaying
-        Task { @MainActor [weak self] in
-            guard let self, self.vlcPlayer === player, self.recoveryTask == nil, !self.isSeeking else { return }
-            self.updatePlaybackClock(position: current, duration: total)
-            // VLC can resume its clock while its last state notification still says buffering.
-            self.updatePlaybackState(playing: self.wantsPlayback && playing,
-                                     buffering: self.wantsPlayback && !playing && self.isBuffering)
-            self.applyPendingVLCResume(player)
-            self.saveProgress()
+    private func handleVLCEvent(_ event: PlayerEvent, player: SwiftVLC.Player) {
+        guard recoveryTask == nil else { return }
+        switch event {
+        case .stateChanged(let state):
+            updatePlaybackState(playing: wantsPlayback && state == .playing,
+                                buffering: wantsPlayback && (state == .opening || state == .buffering))
+            if state == .error {
+                errorMessage = "VLC could not play this stream. Try again or choose another channel."
+                recoverStream()
+            } else if state == .playing {
+                applyPendingVLCResume(player)
+                recordPlaybackStarted()
+                if !wantsPlayback { player.pause() }
+                if pendingResumePosition == nil { errorMessage = nil }
+                subtitles.nativePlayerDidStart()
+                audioTracks.refresh()
+            }
+        case .endReached:
+            guard wantsPlayback else { return }
+            if currentChannel?.isVOD == false { recoverStream(); return }
+            if resumePlaybackTask != nil,
+               enginePlaybackPosition() <= (pausedPlaybackPosition ?? 0) + 0.1 {
+                recoverStream()
+                return
+            }
+            pausedPlaybackPosition = nil
+            cancelStreamRecovery()
+            saveProgress(force: true, completed: true)
+            playbackFinished = true
+            wantsPlayback = false
+            isPlaying = false
+        case .timeChanged(let time):
+            guard !isSeeking else { return }
+            updatePlaybackClock(position: time.secondsValue, duration: player.duration?.secondsValue ?? 0)
+            applyPendingVLCResume(player)
+            saveProgress()
+        case .seekableChanged, .lengthChanged:
+            applyPendingVLCResume(player)
+        case .tracksChanged:
+            audioTracks.refresh()
+            subtitles.loadTracksIfNeeded()
+        default: break
         }
     }
 }
+
 #endif
 
 // MARK: - Headset and system media controls

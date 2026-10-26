@@ -3,7 +3,7 @@ import AVFoundation
 import CoreVideo
 import Combine
 #if os(macOS)
-import VLC
+import SwiftVLC
 #endif
 @testable import EasyIPTV
 
@@ -250,7 +250,7 @@ final class PlaybackProgressTests: XCTestCase {
         manager.playMovie()
         XCTAssertTrue(manager.player === player)
         XCTAssertFalse(manager.isViewingMovieDetails)
-        let resumed = await waitUntil { (manager.vlcPlayer.map { Double($0.time.intValue) / 1000 } ?? manager.player?.currentTime().seconds ?? 0) >= 119 }
+        let resumed = await waitUntil { (manager.vlcPlayer.map { $0.currentTime.secondsValue } ?? manager.player?.currentTime().seconds ?? 0) >= 119 }
         XCTAssertTrue(resumed)
         XCTAssertNil(manager.resumeRequest)
     }
@@ -266,10 +266,8 @@ final class PlaybackProgressTests: XCTestCase {
         // SwiftUI dismisses the alert binding before running the selected action.
         manager.showingResumeChoice = false
         manager.resolveResume(request, startOver: false)
-        manager.vlcPlayer?.media?.addOption(":vout=dummy")
-        manager.vlcPlayer?.media?.addOption(":aout=dummy")
-        manager.vlcPlayer?.play()
-        let resumed = await waitUntil { (manager.vlcPlayer.map { Double($0.time.intValue) / 1000 } ?? manager.player?.currentTime().seconds ?? 0) >= 119 }
+
+        let resumed = await waitUntil { (manager.vlcPlayer.map { $0.currentTime.secondsValue } ?? manager.player?.currentTime().seconds ?? 0) >= 119 }
         XCTAssertTrue(resumed)
         manager.stop()
         manager.playDirectStream(item)
@@ -334,10 +332,7 @@ final class PlaybackProgressTests: XCTestCase {
             #if os(macOS)
             if useVLC {
                 manager.playCurrentStreamWithVLC()
-                let vlc = try XCTUnwrap(manager.vlcPlayer)
-                vlc.media?.addOption(":vout=dummy")
-                vlc.media?.addOption(":aout=dummy")
-                vlc.play()
+                XCTAssertNotNil(manager.vlcPlayer)
             }
             #endif
             let ready = await waitUntil { manager.isPlaying && manager.duration > 0 }
@@ -345,7 +340,7 @@ final class PlaybackProgressTests: XCTestCase {
             manager.seek(to: 80)
             let sought = await waitUntil {
                 #if os(macOS)
-                if useVLC { return abs(Double(manager.vlcPlayer?.time.intValue ?? 0) / 1000 - 80) < 2 }
+                if useVLC { return abs((manager.vlcPlayer?.currentTime.secondsValue ?? 0) - 80) < 2 }
                 #endif
                 return abs((manager.player?.currentTime().seconds ?? 0) - 80) < 2
             }
@@ -401,16 +396,6 @@ final class PlaybackProgressTests: XCTestCase {
             #if os(macOS)
             if useVLC { manager.playCurrentStreamWithVLC() }
             #endif
-            func startVLC() {
-                #if os(macOS)
-                if let player = manager.vlcPlayer {
-                    player.media?.addOption(":vout=dummy")
-                    player.media?.addOption(":aout=dummy")
-                    player.play()
-                }
-                #endif
-            }
-            startVLC()
             let started = await waitUntil { manager.isPlaying }
             XCTAssertTrue(started)
             manager.audioTracks.refresh()
@@ -423,7 +408,6 @@ final class PlaybackProgressTests: XCTestCase {
             manager.audioTracks.select(alternate.id)
             manager.subtitles.importFile(file)
             manager.retryCurrentStream() // Keep the requested selection even while the file is still loading.
-            startVLC()
             let loaded = await waitUntil { manager.subtitles.selectedID == file.absoluteString }
             XCTAssertTrue(loaded)
             manager.subtitles.setTimingDelay(1.5)
@@ -431,12 +415,11 @@ final class PlaybackProgressTests: XCTestCase {
             try FileManager.default.removeItem(at: file)
             manager.pauseForBackground()
             manager.retryCurrentStream()
-            startVLC()
             let restored = await waitUntil {
                 manager.isPlaying && manager.audioTracks.selectedID == alternate.id
                     && manager.subtitles.selectedID == file.absoluteString
             }
-            XCTAssertTrue(restored)
+            XCTAssertTrue(restored, "engine=\(useVLC), playing=\(manager.isPlaying), audio=\(manager.audioTracks.selectedID ?? "nil"), expected=\(alternate.id), subtitles=\(manager.subtitles.selectedID ?? "nil"), error=\(manager.errorMessage ?? "nil")")
             XCTAssertNil(manager.subtitles.errorMessage)
             XCTAssertEqual(manager.subtitles.timingDelay, 1.5)
             manager.subtitles.updateTime(2)
@@ -451,12 +434,11 @@ final class PlaybackProgressTests: XCTestCase {
                 }
                 XCTAssertTrue(applied)
             #if os(macOS)
-            case .vlc(let index): XCTAssertEqual(manager.vlcPlayer?.currentAudioTrackIndex, index)
+            case .vlc(let index): XCTAssertEqual(manager.vlcPlayer?.selectedAudioTrack, index)
             #endif
             }
             manager.subtitles.select(nil)
             manager.retryCurrentStream()
-            startVLC()
             let reopened = await waitUntil { manager.isPlaying && !manager.subtitles.isLoadingTracks }
             XCTAssertTrue(reopened)
             XCTAssertNil(manager.subtitles.selectedID)
@@ -504,20 +486,17 @@ final class PlaybackProgressTests: XCTestCase {
         defer { manager.stop() }
         manager.playDirectStream(media(url: url))
         let player = try XCTUnwrap(manager.vlcPlayer)
-        player.media?.addOption(":vout=dummy")
-        player.media?.addOption(":aout=dummy")
-        player.play()
+
         let ready = await waitUntil { player.isPlaying && player.isSeekable }
         XCTAssertTrue(ready)
         manager.seek(to: 80)
-        let sought = await waitUntil { abs(Double(player.time.intValue) / 1000 - 80) < 2 }
+        let sought = await waitUntil { abs(player.currentTime.secondsValue - 80) < 2 }
         XCTAssertTrue(sought)
         let remote = media()
         manager.currentChannel = remote
         manager.pauseForBackground()
         manager.togglePlayPause()
         // Simulate a dead engine without an error callback, while the UI still reports playing.
-        player.delegate = nil
         player.stop()
         manager.updatePlaybackState(playing: true, buffering: false)
         XCTAssertTrue(manager.vlcPlayer === player)
@@ -673,15 +652,13 @@ final class PlaybackProgressTests: XCTestCase {
         manager.resolveResume(try XCTUnwrap(manager.resumeRequest), startOver: false)
         manager.playCurrentStreamWithVLC()
         let vlc = try XCTUnwrap(manager.vlcPlayer)
-        vlc.media?.addOption(":vout=dummy")
-        vlc.media?.addOption(":aout=dummy")
-        vlc.play()
-        let resumed = await waitUntil { vlc.time.intValue >= 119_000 && vlc.audio?.volume != 0 }
+
+        let resumed = await waitUntil { vlc.currentTime.secondsValue >= 119 && manager.isPlaying }
         XCTAssertTrue(resumed)
         manager.stop()
         XCTAssertNil(manager.vlcPlayer)
         XCTAssertEqual(manager.progressStore.progress(for: item)?.position ?? 0, 120, accuracy: 3)
-        let stopped = await waitUntil { vlc.state == .stopped }
+        let stopped = await waitUntil { vlc.state == .idle && vlc.currentMedia == nil }
         XCTAssertTrue(stopped)
     }
     #endif

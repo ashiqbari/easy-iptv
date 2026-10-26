@@ -6,7 +6,7 @@
 
 ### Your channels. Your movies. Your next episode.
 
-A native Apple IPTV player built with **SwiftUI**, **AVKit**, and **VLCKit**.
+A native Apple IPTV player built with **SwiftUI**, **AVKit**, and **SwiftVLC**.
 Bring your Xtream Codes account or M3U playlist, and make yourself at home.
 
 **Live TV · Movies · TV Series**
@@ -66,7 +66,7 @@ stream support; custom subtitle-file overlays remain in the main player.
 3. Browse Live TV, Movies, or TV Shows. Choose something to watch.
 
 The macOS app requires **macOS 15 or later**. To build from source, use
-**Xcode 16 or later with Swift 6 and Swift Package Manager**.
+**Xcode 26.4 or later with Swift 6.3 and Swift Package Manager**.
 
 ## The little things that matter
 
@@ -244,7 +244,7 @@ Output: `swift-sources/EasyIPTV-macOS.dmg`.
 
 Use `--release` for an optimized app-only build, or `--clean` to discard the cache explicitly. DMG builds default to Release. Batch small UI edits before packaging; use focused checks while iterating.
 
-The packaging script embeds VLCKit and applies an **ad-hoc code signature**.
+SwiftVLC 1.0.0 links libVLC 4 statically into the executable. The packaging script applies an **ad-hoc code signature**. Building requires Swift 6.3+ / Xcode 26.4+.
 For the full build and release instructions, see [Getting Started](GETTINGSTARTED.md).
 
 ## For contributors
@@ -270,4 +270,4 @@ The app opens on a standalone Home dashboard without category or channel sidebar
 
 ## License
 
-The application is licensed under the MIT License; see [LICENSE](LICENSE). The macOS VLC playback dependency is licensed under LGPL 2.1; its license is included at [swift-sources/LICENSE-LGPL-2.1](swift-sources/LICENSE-LGPL-2.1) and copied into the app bundle.
+The application is licensed under the MIT License; see [LICENSE](LICENSE). SwiftVLC is MIT-licensed (see `swift-sources/LICENSE-SwiftVLC`). The bundled libVLC engine is licensed under LGPL 2.1; its license is included at [swift-sources/LICENSE-LGPL-2.1](swift-sources/LICENSE-LGPL-2.1) and copied into the app bundle.

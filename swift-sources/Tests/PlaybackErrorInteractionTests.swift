@@ -20,6 +20,7 @@ final class PlaybackErrorInteractionTests: XCTestCase {
                 manager.continueWatching(item)
                 if !useVLC { manager.playAVKitFixture(item) }
                 manager.player?.replaceCurrentItem(with: nil)
+                await manager.vlcPlayer?.shutdown()
                 manager.isPlaying = false; manager.isBuffering = false
                 manager.errorMessage = "This stream could not resume at the saved position. Try again, switch player, or choose Start over."
                 let originalAV = manager.player, originalVLC = manager.vlcPlayer

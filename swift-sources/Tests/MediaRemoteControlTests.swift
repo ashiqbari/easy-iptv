@@ -3,7 +3,7 @@ import AVFoundation
 import MediaPlayer
 #if os(macOS)
 import AppKit
-import VLC
+import SwiftVLC
 #endif
 @testable import EasyIPTV
 
@@ -47,11 +47,11 @@ final class MediaRemoteControlTests: XCTestCase {
             #if os(macOS)
             if useVLC {
                 manager.playCurrentStreamWithVLC()
-                let surface = VLCVideoSurfaceNSView()
+                let surface = try XCTUnwrap(manager.vlcVideoSurface)
                 let host = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 320, height: 180),
                     styleMask: [.titled], backing: .buffered, defer: false)
                 host.isReleasedWhenClosed = false; host.contentView = surface; host.makeKeyAndOrderFront(nil)
-                surface.update(player: try XCTUnwrap(manager.vlcPlayer), shouldPlay: true, screenSize: .auto)
+                surface.update(player: try XCTUnwrap(manager.vlcPlayer), screenSize: .auto)
                 window = host
             }
             #endif

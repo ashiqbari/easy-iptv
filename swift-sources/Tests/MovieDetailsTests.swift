@@ -85,7 +85,7 @@ final class MovieDetailsTests: XCTestCase {
         let player = try XCTUnwrap(manager.vlcPlayer)
         manager.returnToMovie()
         XCTAssertTrue(manager.vlcPlayer === player)
-        XCTAssertNotNil(player.media)
+        XCTAssertNotNil(player.currentMedia)
         XCTAssertTrue(manager.isViewingMovieDetails)
         XCTAssertEqual(manager.progressStore.progress(for: item)?.resumePosition, 120)
         XCTAssertEqual(manager.searchText, "Movie")

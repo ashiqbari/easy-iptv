@@ -2,7 +2,7 @@ import AVFoundation
 import Combine
 import Foundation
 #if os(macOS)
-import VLC
+import SwiftVLC
 #endif
 
 struct SubtitleTrack: Identifiable {
@@ -10,7 +10,7 @@ struct SubtitleTrack: Identifiable {
         case av(AVMediaSelectionOption)
         case file(SubtitleSource)
         #if os(macOS)
-        case vlc(Int32)
+        case vlc(SwiftVLC.Track)
         #endif
     }
     let id: String
@@ -65,7 +65,7 @@ final class SubtitleController: NSObject, ObservableObject {
     private var avGroup: AVMediaSelectionGroup?
     private var legibleOutput: AVPlayerItemLegibleOutput?
     #if os(macOS)
-    private weak var vlcPlayer: VLCMediaPlayer?
+    private weak var vlcPlayer: SwiftVLC.Player?
     #endif
 
     private static func savedFontSize() -> Double {
@@ -126,7 +126,7 @@ final class SubtitleController: NSObject, ObservableObject {
         avItem = nil
         avGroup = nil
         #if os(macOS)
-        vlcPlayer?.currentVideoSubTitleDelay = 0
+        try? vlcPlayer?.setSubtitleDelay(.zero)
         vlcPlayer = nil
         #endif
         if mediaKey != item?.subtitleCacheKey {
@@ -172,14 +172,14 @@ final class SubtitleController: NSObject, ObservableObject {
     }
 
     #if os(macOS)
-    func configure(player: VLCMediaPlayer, provider: @escaping () async throws -> [SubtitleSource], offlineSources: [SubtitleSource]? = nil) {
+    func configure(player: SwiftVLC.Player, provider: @escaping () async throws -> [SubtitleSource], offlineSources: [SubtitleSource]? = nil) {
         vlcPlayer = player
         prepareProvider(provider, offlineSources: offlineSources)
         loadTracksIfNeeded()
     }
 
     func nativePlayerDidStart() {
-        if document != nil || selectedID == nil { vlcPlayer?.currentVideoSubTitleIndex = -1 }
+        if document != nil || selectedID == nil { vlcPlayer?.selectedSubtitleTrack = nil }
         applyNativeFontSize()
         applyNativeTiming()
         loadTracksIfNeeded()
@@ -240,18 +240,15 @@ final class SubtitleController: NSObject, ObservableObject {
                 if let player {
                     // Opening/buffering can precede discovery of the embedded tracks.
                     for _ in 0..<100 {
-                        if player.isPlaying || player.state == .paused || player.state == .ended { break }
+                        if player.state == .playing || player.state == .paused || player.didReachEnd { break }
                         if player.state == .error { throw SubtitleError.discovery }
                         try await Task.sleep(nanoseconds: 100_000_000)
                     }
                     try Task.checkCancellation()
                     guard let self, self.generation == token, self.nativeAttempt == attempt else { return }
-                    guard player.isPlaying || player.state == .paused || player.state == .ended else { throw SubtitleError.discovery }
-                    let names = player.videoSubTitlesNames
-                    let indexes = player.videoSubTitlesIndexes
-                    available += zip(names, indexes).compactMap { name, index in
-                        guard let number = index as? NSNumber, number.int32Value >= 0 else { return nil }
-                        return SubtitleTrack(id: "vlc:\(number.int32Value)", label: name as? String ?? "Track \(number)", source: .vlc(number.int32Value))
+                    guard player.state == .playing || player.state == .paused || player.didReachEnd else { throw SubtitleError.discovery }
+                    available += player.subtitleTracks.map {
+                        SubtitleTrack(id: "vlc:\($0.id)", label: $0.name, source: .vlc($0))
                     }
                 }
                 #endif
@@ -307,8 +304,8 @@ final class SubtitleController: NSObject, ObservableObject {
         text = ""
         if let group = avGroup { avItem?.select(nil, in: group) }
         #if os(macOS)
-        vlcPlayer?.currentVideoSubTitleIndex = -1
-        vlcPlayer?.currentVideoSubTitleDelay = 0
+        vlcPlayer?.selectedSubtitleTrack = nil
+        try? vlcPlayer?.setSubtitleDelay(.zero)
         #endif
         guard let id, let track = tracks.first(where: { $0.id == id }) else { return }
         switch track.source {
@@ -319,7 +316,7 @@ final class SubtitleController: NSObject, ObservableObject {
         #if os(macOS)
         case .vlc(let index):
             selectedID = id
-            vlcPlayer?.currentVideoSubTitleIndex = index
+            vlcPlayer?.selectedSubtitleTrack = index
             applyNativeFontSize()
             applyNativeTiming()
         #endif
@@ -393,7 +390,8 @@ final class SubtitleController: NSObject, ObservableObject {
             if case .vlc = track.source { return true }
             return false
         }
-        vlcPlayer?.currentVideoSubTitleDelay = isNative ? Int((timingDelay * 1_000_000).rounded()) : 0
+        do { try vlcPlayer?.setSubtitleDelay(.seconds(isNative ? timingDelay : 0)) }
+        catch { errorMessage = "Could not adjust subtitle timing. \(error.localizedDescription)" }
         #endif
     }
 
@@ -406,13 +404,7 @@ final class SubtitleController: NSObject, ObservableObject {
     private func applyNativeFontSize() {
         #if os(macOS)
         guard let player = vlcPlayer else { return }
-        // VLCKit 3 exposes its live font setter internally, but omits it from
-        // Swift's public header. Check availability before calling this selector.
-        let setter = NSSelectorFromString("setTextRendererFontSize:")
-        if player.responds(to: setter) {
-            // VLC uses a relative size divisor: a smaller value produces larger text.
-            player.perform(setter, with: NSNumber(value: Int((720 / fontSize).rounded())))
-        }
+        player.setSubtitleScale(SubtitleScale(Float(fontSize / 24)))
         #endif
     }
 }

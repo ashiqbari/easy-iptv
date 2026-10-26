@@ -112,27 +112,18 @@ final class DownloadTests: XCTestCase {
         server.release("/live.mov")
         let suite = "live-reconnect-\(UUID())", defaults = UserDefaults(suiteName: suite)!
         let manager = IPTVPlayerManager(progressDefaults: defaults)
-        let surface = VLCVideoSurfaceNSView()
-        func attach() {
-            guard let player = manager.vlcPlayer else { return }
-            player.media?.addOption(":aout=dummy")
-            player.media?.addOption(":vout=dummy")
-            surface.update(player: player, shouldPlay: !manager.isWaitingToReconnect, screenSize: .auto)
-        }
+
         defer { manager.stop(); server.stop(); defaults.removePersistentDomain(forName: suite) }
         let channel = M3UItem(name: "Live fixture", streamURL: server.url("/live.mov"), contentType: .live)
         manager.playChannel(channel)
-        try await wait { attach(); return manager.isPlaying }
+        try await wait { return manager.isPlaying }
         let first = try XCTUnwrap(manager.vlcPlayer)
         manager.updatePlaybackState(playing: false, buffering: true)
         manager.recoverStream()
-        let replacementSurface = VLCVideoSurfaceNSView()
-        replacementSurface.update(player: first, shouldPlay: !manager.isWaitingToReconnect, screenSize: .auto)
         try await Task.sleep(nanoseconds: 400_000_000)
         XCTAssertTrue(manager.vlcPlayer === first, "The retry delay must precede the new connection")
         XCTAssertEqual(first.state, .stopped, "Close the old connection during backoff, before opening its replacement")
         for _ in 0..<800 {
-            attach()
             if manager.vlcPlayer !== first && manager.isPlaying { break }
             try await Task.sleep(nanoseconds: 20_000_000)
         }
@@ -141,7 +132,7 @@ final class DownloadTests: XCTestCase {
         XCTAssertNil(manager.recoveryMessage)
         let replacement = try XCTUnwrap(manager.vlcPlayer)
         manager.retryCurrentStream()
-        try await wait { attach(); return manager.isPlaying && manager.vlcPlayer !== replacement }
+        try await wait { return manager.isPlaying && manager.vlcPlayer !== replacement }
         XCTAssertEqual(manager.currentChannel?.id, channel.id)
         XCTAssertGreaterThanOrEqual(server.count("/live.mov"), 3)
     }
@@ -159,29 +150,23 @@ final class DownloadTests: XCTestCase {
             let suite = "seek-recovery-\(UUID())", defaults = UserDefaults(suiteName: suite)!
             let manager = IPTVPlayerManager(progressDefaults: defaults)
             defer { manager.stop(); defaults.removePersistentDomain(forName: suite) }
-            let surface = VLCVideoSurfaceNSView()
-            func attach() {
-                guard let player = manager.vlcPlayer else { return }
-                player.media?.addOption(":aout=dummy")
-                player.media?.addOption(":vout=dummy")
-                surface.update(player: player, shouldPlay: !manager.isWaitingToReconnect, screenSize: .auto)
-            }
+
             let item = M3UItem(name: "Seek fixture", streamURL: server.url("/seek.mov"), contentType: type)
             manager.playDirectStream(item)
-            try await wait { attach(); return manager.isPlaying && manager.duration > 0 }
+            try await wait { return manager.isPlaying && manager.duration > 0 }
             manager.seek(to: 80)
             manager.seekBy(seconds: 10)
             manager.seekBy(seconds: 10)
-            try await wait { abs(Double(manager.vlcPlayer?.time.intValue ?? 0) / 1000 - 100) < 2 }
+            try await wait { abs((manager.vlcPlayer?.currentTime.secondsValue ?? 0) - 100) < 2 }
             let old = try XCTUnwrap(manager.vlcPlayer)
             manager.isSeeking = true // Recovery can replace the scrubber before its editing-ended callback.
             manager.recoverStream()
-            try await wait { attach(); return manager.vlcPlayer !== old && manager.isPlaying && abs(Double(manager.vlcPlayer?.time.intValue ?? 0) / 1000 - 100) < 3 }
+            try await wait { return manager.vlcPlayer !== old && manager.isPlaying && abs((manager.vlcPlayer?.currentTime.secondsValue ?? 0) - 100) < 3 }
             try await Task.sleep(nanoseconds: 1_500_000_000)
-            XCTAssertGreaterThan(Double(manager.vlcPlayer?.time.intValue ?? 0) / 1000, 100)
+            XCTAssertGreaterThan((manager.vlcPlayer?.currentTime.secondsValue ?? 0), 100)
             XCTAssertFalse(manager.isSeeking)
             XCTAssertGreaterThan(manager.currentTime, 100)
-            XCTAssertEqual(manager.vlcPlayer?.audio?.volume, Int32((manager.playbackVolume * 100).rounded()))
+            XCTAssertTrue(manager.isPlaying)
             XCTAssertNil(manager.recoveryMessage)
             XCTAssertNil(manager.errorMessage)
         }

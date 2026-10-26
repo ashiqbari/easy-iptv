@@ -126,3 +126,8 @@ final class RecentlyWatchedStore {
         if let data = try? JSONEncoder().encode(records) { defaults.set(data, forKey: storageKey) }
     }
 }
+
+// VLC uses Duration; persistence and AVFoundation use seconds.
+extension Duration {
+    var secondsValue: Double { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
+}

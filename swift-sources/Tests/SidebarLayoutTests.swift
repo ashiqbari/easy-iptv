@@ -3,7 +3,7 @@ import SwiftUI
 import AVFoundation
 #if os(macOS)
 import AppKit
-import VLC
+import SwiftVLC
 #endif
 @testable import EasyIPTV
 
@@ -330,7 +330,7 @@ final class SidebarLayoutTests: XCTestCase {
         defer { manager.stop(); window.close() }
 
         func surface(in view: NSView) -> NSView? {
-            if useVLC { return manager.vlcPlayer?.drawable as? NSView }
+            if useVLC, view is VLCVideoSurfaceNSView { return view }
             if let view = view as? AVPlayerLayerNSView { return view }
             return view.subviews.lazy.compactMap { surface(in: $0) }.first
         }

@@ -2,7 +2,7 @@ import XCTest
 import SwiftUI
 #if os(macOS)
 import AppKit
-import VLC
+import SwiftVLC
 #endif
 @testable import EasyIPTV
 
@@ -42,7 +42,7 @@ final class SearchTests: XCTestCase {
         defer { window.close() }
         let vlcPlayer = manager.vlcPlayer
         func surface(_ view: NSView) -> NSView? {
-            if useVLC { return manager.vlcPlayer?.drawable as? NSView }
+            if useVLC, view is VLCVideoSurfaceNSView { return view }
             return (view as? AVPlayerLayerNSView) ?? view.subviews.lazy.compactMap { surface($0) }.first
         }
         hosting.layoutSubtreeIfNeeded()

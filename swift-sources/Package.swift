@@ -11,18 +11,19 @@ let package = Package(
         .executable(name: "EasyIPTV", targets: ["EasyIPTV"])
     ],
     dependencies: [
-        .package(url: "https://github.com/dooop/swift-vlc", exact: "0.5.0")
+        .package(url: "https://github.com/harflabs/SwiftVLC.git", exact: "1.0.0")
     ],
     targets: [
         .executableTarget(
             name: "EasyIPTV",
             dependencies: [
-                .product(name: "VLC", package: "swift-vlc", condition: .when(platforms: [.macOS]))
+                .product(name: "SwiftVLC", package: "SwiftVLC", condition: .when(platforms: [.macOS]))
             ],
             path: ".",
             exclude: [
                 "Info.plist",
                 "LICENSE-LGPL-2.1",
+                "LICENSE-SwiftVLC",
                 "build_dmg.sh",
                 "run_app.command",
                 "AppIcon.png",
@@ -37,7 +38,6 @@ let package = Package(
                 "Downloads.swift",
                 "DownloadsView.swift",
                 "LibraryLifecycle.swift",
-                "VLCPlaybackRetirement.swift",
                 "IPTVPlaybackView.swift",
                 "VideoScreenSize.swift",
                 "PictureInPicture.swift",

@@ -3,7 +3,7 @@ import AVFoundation
 import SwiftUI
 #if os(macOS)
 import AppKit
-import VLC
+import SwiftVLC
 #endif
 @testable import EasyIPTV
 
@@ -85,10 +85,7 @@ final class VideoScreenSizeTests: XCTestCase {
         let av = manager.player
         let avItem = av?.currentItem
         let vlc = manager.vlcPlayer
-        if let vlc {
-            var inheritedAspect = Array("4:3".utf8CString)
-            inheritedAspect.withUnsafeMutableBufferPointer { vlc.videoAspectRatio = $0.baseAddress }
-        }
+        vlc?.aspectRatio = .ratio(4, 3)
         let hosting = NSHostingView(rootView: IPTVPlaybackView(manager: manager))
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 700, height: 500), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -110,12 +107,12 @@ final class VideoScreenSizeTests: XCTestCase {
         }
         try await settle()
         for _ in 0..<100 {
-            if manager.isPlaying && (useVLC ? (vlc?.time.intValue ?? 0) > 0 : (av?.currentTime().seconds ?? 0) > 0) { break }
+            if manager.isPlaying && (useVLC ? (vlc?.currentTime.secondsValue ?? 0) > 0 : (av?.currentTime().seconds ?? 0) > 0) { break }
             try await settle()
         }
-        let original: NSView = try XCTUnwrap(useVLC ? vlc?.drawable as? NSView : avSurface(in: hosting))
-        let media = vlc?.media
-        let start = useVLC ? Double(vlc!.time.intValue) / 1000 : av!.currentTime().seconds
+        let original: NSView = try XCTUnwrap(useVLC ? vlcSurface(in: hosting) : avSurface(in: hosting))
+        let media = vlc?.currentMedia
+        let start = useVLC ? vlc!.currentTime.secondsValue : av!.currentTime().seconds
         for mode in VideoScreenSize.allCases {
             manager.screenSize = mode
             try await settle()
@@ -123,29 +120,27 @@ final class VideoScreenSizeTests: XCTestCase {
             XCTAssertTrue(manager.player === av)
             XCTAssertTrue(manager.vlcPlayer === vlc)
             XCTAssertTrue(av?.currentItem === avItem)
-            XCTAssertTrue(vlc?.media === media)
+            XCTAssertTrue(vlc?.currentMedia === media)
             XCTAssertEqual(manager.currentChannel?.id, item.id)
-            XCTAssertTrue((useVLC ? vlc?.drawable as? NSView : avSurface(in: hosting)) === original)
+            XCTAssertTrue((useVLC ? vlcSurface(in: hosting) : avSurface(in: hosting)) === original)
             if let vlc {
-                let aspect = vlc.videoAspectRatio.map { String(cString: $0) }
-                let crop = vlc.videoCropGeometry.map { String(cString: $0) }
-                if mode.ratio != nil { XCTAssertEqual(aspect, mode.title) }
-                if mode == .auto { XCTAssertTrue(aspect == nil || aspect == ""); XCTAssertTrue(crop == nil || crop == "") }
-                if mode == .stretch { XCTAssertEqual(aspect, "700:500") }
-                if mode == .zoom { XCTAssertEqual(crop, "700:500") }
+                let aspect = vlc.aspectRatio
+                if mode.ratio != nil { XCTAssertEqual(aspect.description, mode.title) }
+                if mode == .auto { XCTAssertEqual(aspect, .default) }
+                if mode == .stretch { XCTAssertEqual(aspect, .ratio(700, 500)) }
+                if mode == .zoom { XCTAssertEqual(aspect, .fill) }
             }
         }
         window.setContentSize(CGSize(width: 500, height: 700))
         try await settle()
-        if let vlc { XCTAssertEqual(vlc.videoCropGeometry.map { String(cString: $0) }, "500:700") }
+        if let vlc { XCTAssertEqual(vlc.aspectRatio, .fill) }
         manager.screenSize = .auto
         try await settle()
         if let vlc {
-            XCTAssertTrue(vlc.videoAspectRatio.map { String(cString: $0).isEmpty } ?? true)
-            XCTAssertTrue(vlc.videoCropGeometry.map { String(cString: $0).isEmpty } ?? true)
+            XCTAssertEqual(vlc.aspectRatio, .default)
         }
-        XCTAssertTrue((useVLC ? vlc?.drawable as? NSView : avSurface(in: hosting)) === original)
-        let end = useVLC ? Double(vlc!.time.intValue) / 1000 : av!.currentTime().seconds
+        XCTAssertTrue((useVLC ? vlcSurface(in: hosting) : avSurface(in: hosting)) === original)
+        let end = useVLC ? vlc!.currentTime.secondsValue : av!.currentTime().seconds
         XCTAssertGreaterThan(end, start)
     }
     #endif

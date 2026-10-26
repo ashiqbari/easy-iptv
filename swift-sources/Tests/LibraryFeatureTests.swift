@@ -2,7 +2,7 @@ import XCTest
 import SwiftUI
 import AVFoundation
 #if os(macOS)
-import VLC
+import SwiftVLC
 #endif
 @testable import EasyIPTV
 
@@ -332,12 +332,13 @@ final class LibraryFeatureTests: XCTestCase {
     func testVLCDiscoversAndSelectsRealAlternateAudio() async throws {
         let url = try await alternateAudioMedia()
         defer { try? FileManager.default.removeItem(at: url) }
-        let player = VLCMediaPlayer(library: VLCLibrary(options: ["--no-volume-save", "--no-video"]))
-        player.media = VLCMedia(url: url)
+        let player = SwiftVLC.Player(instance: try VLCInstance(arguments: VLCInstance.defaultArguments + ["--no-video", "--aout=dummy"]))
+        player.load(try SwiftVLC.Media(url: url))
         let controller = AudioTrackController()
         controller.configure(player)
-        defer { controller.reset(); VLCPlaybackRetirement.shared.retire(player) }
-        player.play()
+        defer { controller.reset(); player.stop() }
+        try player.play()
+
         for _ in 0..<200 {
             controller.refresh()
             if controller.tracks.count == 2 { break }
@@ -347,10 +348,65 @@ final class LibraryFeatureTests: XCTestCase {
         let track = try XCTUnwrap(controller.tracks.last)
         controller.select(track.id)
         guard case .vlc(let index) = track.source else { return XCTFail("Expected a VLC audio track") }
-        XCTAssertEqual(player.currentAudioTrackIndex, index)
+        for _ in 0..<100 {
+            if player.selectedAudioTrack == index { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(player.selectedAudioTrack, index)
         XCTAssertEqual(controller.selectedID, track.id)
     }
     #endif
+
+    func testLiveClockFreezeReconnectsEvenWhenEngineReportsPlaying() {
+        let suite = "live-freeze-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer { manager.stop() }
+        manager.playDirectStream(item("freeze"))
+        manager.updatePlaybackState(playing: true, buffering: false)
+        manager.checkLiveProgress(position: 10, at: 100)
+        manager.checkLiveProgress(position: 10, at: 119)
+        XCTAssertFalse(manager.isWaitingToReconnect)
+        manager.checkLiveProgress(position: 10, at: 120)
+        XCTAssertTrue(manager.isWaitingToReconnect)
+        manager.checkLiveProgress(position: 10, at: 121)
+        XCTAssertEqual(manager.recoveryMessage, "Reconnecting… attempt 1 of 3")
+    }
+
+    func testLiveClockMovementAndPlaybackChangesPreventFalseRecovery() {
+        let suite = "live-progress-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer { manager.stop() }
+        manager.playDirectStream(item("progress"))
+        manager.checkLiveProgress(position: 10, at: 100)
+        manager.checkLiveProgress(position: 11, at: 119)
+        manager.checkLiveProgress(position: 11, at: 120)
+        XCTAssertFalse(manager.isWaitingToReconnect)
+        // A timestamp discontinuity is still progress, not a frozen stream.
+        manager.checkLiveProgress(position: 1, at: 138)
+        manager.checkLiveProgress(position: 1, at: 140)
+        XCTAssertFalse(manager.isWaitingToReconnect)
+        manager.pauseForBackground()
+        manager.checkLiveProgress(position: 1, at: 200)
+        XCTAssertFalse(manager.isWaitingToReconnect)
+        manager.togglePlayPause()
+        manager.checkLiveProgress(position: 10, at: 210)
+        manager.checkLiveProgress(position: 10, at: 230)
+        XCTAssertTrue(manager.isWaitingToReconnect, "Resuming must restart freeze detection")
+        manager.playDirectStream(item("replacement"))
+        manager.checkLiveProgress(position: 0, at: 201)
+        XCTAssertFalse(manager.isWaitingToReconnect)
+        manager.playDirectStream(M3UItem(name: "Movie", streamURL: URL(string: "https://provider.invalid/movie.mp4")!, contentType: .movie))
+        manager.checkLiveProgress(position: 10, at: 100)
+        manager.checkLiveProgress(position: 10, at: 200)
+        XCTAssertFalse(manager.isWaitingToReconnect)
+        manager.stop()
+        manager.checkLiveProgress(position: 0, at: 300)
+        XCTAssertFalse(manager.isWaitingToReconnect)
+    }
 
     func testRecoveryIsBoundedAndStopsWhenPausedOrReplaced() async throws {
         XCTAssertEqual((0..<3).compactMap { IPTVPlayerManager.recoveryDelay(after: $0) }, [2_000_000_000, 4_000_000_000, 8_000_000_000])

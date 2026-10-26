@@ -2,7 +2,7 @@ import XCTest
 import AVFoundation
 import SwiftUI
 #if os(macOS)
-import VLC
+import SwiftVLC
 import AppKit
 #endif
 @testable import EasyIPTV
@@ -223,14 +223,14 @@ final class LifecycleTests: XCTestCase {
         func surface(in view: NSView) -> NSView? {
             if view === hosting, let floating = manager.pictureInPicture.floatingWindow?.contentView,
                let surface = surface(in: floating) { return surface }
-            if useVLC { return manager.vlcPlayer?.drawable as? NSView }
+            if useVLC, view is VLCVideoSurfaceNSView { return view }
             if view is AVPlayerLayerNSView { return view }
             return view.subviews.lazy.compactMap { surface(in: $0) }.first
         }
         try await settle()
-        try await waitUntil { manager.isPlaying && (useVLC ? (vlc?.time.intValue ?? 0) > 0 : (player?.currentTime().seconds ?? 0) > 0) }
+        try await waitUntil { manager.isPlaying && (useVLC ? (vlc?.currentTime.secondsValue ?? 0) > 0 : (player?.currentTime().seconds ?? 0) > 0) }
         let original = try XCTUnwrap(surface(in: hosting))
-        let start = useVLC ? Double(vlc!.time.intValue) / 1000 : player!.currentTime().seconds
+        let start = useVLC ? vlc!.currentTime.secondsValue : player!.currentTime().seconds
         for section in [M3UItem.ContentType.movie, .series, .live] {
             manager.selectedSection = section
             manager.selectedCategory = "Recently Watched"
@@ -259,7 +259,7 @@ final class LifecycleTests: XCTestCase {
         XCTAssertTrue(manager.player === player)
         XCTAssertTrue(manager.vlcPlayer === vlc)
         XCTAssertTrue(manager.isPlaying)
-        let end = useVLC ? Double(vlc!.time.intValue) / 1000 : player!.currentTime().seconds
+        let end = useVLC ? vlc!.currentTime.secondsValue : player!.currentTime().seconds
         XCTAssertGreaterThan(end, start)
         manager.playChannel(movie)
         manager.playMovie()
@@ -273,12 +273,29 @@ final class LifecycleTests: XCTestCase {
         XCTAssertNil(manager.player)
     }
 
-    @MainActor func testVLCChannelSwitchesReuseLibraryAndPreserveVolume() async throws {
+    @MainActor func testVLCStartsBeforePresentationAndAttachmentDoesNotResumePausedPlayback() async throws {
+        let url = try await alternateAudioMedia()
+        let defaults = UserDefaults(suiteName: "vlc-surface-\(UUID())")!
+        let manager = IPTVPlayerManager(progressDefaults: defaults)
+        defer { manager.stop(); try? FileManager.default.removeItem(at: url) }
+        manager.playDirectStream(M3UItem(name: "Fixture", streamURL: url, contentType: .live))
+        let player = try XCTUnwrap(manager.vlcPlayer)
+        try await waitUntil { manager.isPlaying && player.currentTime > .zero }
+        manager.pauseForBackground()
+        try await waitUntil { player.state == .paused }
+        let surface = try XCTUnwrap(manager.vlcVideoSurface)
+        surface.update(player: player, screenSize: .auto)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(player.state, .paused, "Attaching or redrawing must not control playback")
+        manager.togglePlayPause()
+        try await waitUntil { manager.isPlaying }
+    }
+
+    @MainActor func testVLCChannelSwitchesReleasePlayersAndPreserveVolume() async throws {
         let suite = "vlc-channel-switch-\(UUID())"
         let defaults = UserDefaults(suiteName: suite)!
-        let url = try await silentMedia()
+        let url = try await alternateAudioMedia()
         let manager = IPTVPlayerManager(progressDefaults: defaults)
-        let surface = VLCVideoSurfaceNSView()
         defer {
             manager.stop()
             defaults.removePersistentDomain(forName: suite)
@@ -286,35 +303,31 @@ final class LifecycleTests: XCTestCase {
         }
         manager.playbackVolume = 0.35
         manager.playChannel(M3UItem(name: "First channel", streamURL: url, contentType: .live))
-        let library = try XCTUnwrap(manager.vlcPlayer?.libraryInstance)
         for index in 0..<8 {
             let previous = WeakReference(manager.vlcPlayer)
             manager.playChannel(M3UItem(name: "Channel \(index)", streamURL: url, contentType: .live))
             let player = try XCTUnwrap(manager.vlcPlayer)
-            XCTAssertTrue(player.libraryInstance === library)
-            surface.update(player: player, shouldPlay: true, screenSize: .auto)
             try await waitUntil { manager.isPlaying && previous.value == nil }
             manager.playbackVolume = 0.35
-            XCTAssertEqual(player.audio?.volume, 35)
+            XCTAssertEqual(player.volume, 0.35)
             XCTAssertEqual(defaults.float(forKey: "com.iptvplayer.playbackVolume"), 0.35)
             manager.toggleMute()
-            XCTAssertEqual(player.audio?.volume, 0)
+            XCTAssertEqual(player.volume, 0)
             manager.toggleMute()
-            XCTAssertEqual(player.audio?.volume, 35)
+            XCTAssertEqual(player.volume, 0.35)
         }
     }
 
-    @MainActor func testVLCRetirementReleasesPlayerAndDrawableAfterManagerDeinit() async throws {
+    @MainActor func testVLCShutdownReleasesPlayerAndSurfaceAfterManagerDeinit() async throws {
         var manager: IPTVPlayerManager? = IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: UUID().uuidString)!)
         let reference = WeakReference(manager)
-        weak var playerReference: VLCMediaPlayer?
+        weak var playerReference: SwiftVLC.Player?
         weak var viewReference: NSView?
         autoreleasepool {
             manager?.playAVKitFixture(M3UItem(name: "Local", streamURL: URL(fileURLWithPath: "/private/tmp/nonexistent-lifecycle-fixture.mp4"), contentType: .movie))
             manager?.playCurrentStreamWithVLC()
             let player = manager!.vlcPlayer!
-            let view = NSView()
-            player.drawable = view
+            let view = manager!.vlcVideoSurface!
             playerReference = player
             viewReference = view
         }

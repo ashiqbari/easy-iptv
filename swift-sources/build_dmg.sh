@@ -2,7 +2,7 @@
 # ==============================================================================
 # EasyIPTV - Native macOS .app & optional .dmg Automated Build Script
 # Compatible with macOS Sequoia (15.0+) and newer
-# Requires: Xcode 16+ with Swift 6.0 (SwiftPM builds the VLC framework)
+# Requires: Xcode 26.4+ with Swift 6.3 (SwiftPM links SwiftVLC and libVLC)
 # ==============================================================================
 
 set -e
@@ -70,7 +70,7 @@ if [ "${BUILD_ONLY}" = false ]; then
 fi
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}"
 
-# Compile through SwiftPM so the VLCKit binary dependency is linked correctly.
+# Compile through SwiftPM so the SwiftVLC binary dependency is linked correctly.
 echo -e "${BLUE}[2/4] Building ${CONFIGURATION} Swift, AVKit, and VLC sources for macOS 15+...${NC}"
 if ! command -v swift &> /dev/null; then
     echo -e "${RED}Error: Swift Package Manager is required to build the VLC playback engine.${NC}"
@@ -91,19 +91,8 @@ for RESOURCE_BUNDLE in .build/${CONFIGURATION}/*.resources; do
     fi
 done
 
-# SwiftPM builds the executable but does not assemble a macOS .app bundle.
-# Embed VLCKit so the app does not depend on the local SwiftPM build cache.
-VLC_FRAMEWORK=$(find .build/artifacts -path '*/VLCKit.xcframework/macos-*/VLCKit.framework' -type d ! -path '*/__MACOSX/*' -print -quit)
-if [ -z "${VLC_FRAMEWORK}" ]; then
-    echo -e "${RED}Error: VLCKit.framework was not found in the SwiftPM build artifacts.${NC}"
-    exit 1
-fi
-cp -R "${VLC_FRAMEWORK}" "${FRAMEWORKS_DIR}/VLCKit.framework"
-VLC_BINARY="${FRAMEWORKS_DIR}/VLCKit.framework/Versions/A/VLCKit"
-VLC_INSTALL_ID=$(otool -D "${VLC_BINARY}" | tail -n 1)
-install_name_tool -id "@rpath/VLCKit.framework/Versions/A/VLCKit" "${VLC_BINARY}"
-install_name_tool -change "${VLC_INSTALL_ID}" "@rpath/VLCKit.framework/Versions/A/VLCKit" "${MACOS_DIR}/${APP_NAME}"
-install_name_tool -add_rpath "@executable_path/../Frameworks" "${MACOS_DIR}/${APP_NAME}"
+# SwiftVLC's libVLC XCFramework is statically linked into the executable.
+# No VLCKit framework or build-cache runtime paths are needed.
 echo -e "${GREEN}✓ Binary compiled via SwiftPM successfully.${NC}"
 
 # Package Info.plist and Resources (AppIcon)
@@ -179,6 +168,8 @@ fi
 if [ -f "LICENSE-LGPL-2.1" ]; then
     cp LICENSE-LGPL-2.1 "${RESOURCES_DIR}/LICENSE-LGPL-2.1.txt"
 fi
+
+cp LICENSE-SwiftVLC "${RESOURCES_DIR}/LICENSE-SwiftVLC.txt"
 
 # Code sign locally for ad-hoc execution on Mac
 echo "Applying ad-hoc code signature..."

@@ -1,6 +1,6 @@
 import XCTest
 #if os(macOS)
-import VLC
+import SwiftVLC
 #endif
 @testable import EasyIPTV
 
@@ -239,10 +239,8 @@ final class RecentlyWatchedTests: XCTestCase {
             try? FileManager.default.removeItem(at: url)
         }
         manager.playDirectStream(item)
-        let player = try XCTUnwrap(manager.vlcPlayer)
-        player.media?.addOption(":vout=dummy")
-        player.media?.addOption(":aout=dummy")
-        player.play()
+        XCTAssertNotNil(manager.vlcPlayer)
+
         for _ in 0..<250 {
             if !manager.recentlyWatchedStore.records.isEmpty { break }
             try await Task.sleep(nanoseconds: 20_000_000)

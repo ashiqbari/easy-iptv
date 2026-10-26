@@ -16,6 +16,9 @@ extension IPTVPlayerManager {
 
 /// A native-written silent movie exercises real metadata/clock without a provider account.
 func silentMedia() async throws -> URL {
+    #if os(macOS)
+    await MainActor.run { _ = NSApplication.shared }
+    #endif
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("resume-test-\(UUID()).mov")
     let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
     let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
@@ -49,7 +52,7 @@ func silentMedia() async throws -> URL {
     return url
 }
 
-/// Two silent PCM tracks in one alternate group exercise real engine selection.
+/// Two silent AAC tracks in one alternate group exercise real engine selection.
 func alternateAudioMedia() async throws -> URL {
     let wav = FileManager.default.temporaryDirectory.appendingPathComponent("audio-source-\(UUID()).wav")
     let mov = FileManager.default.temporaryDirectory.appendingPathComponent("audio-tracks-\(UUID()).mov")
@@ -75,8 +78,10 @@ func alternateAudioMedia() async throws -> URL {
     let output = AVAssetReaderTrackOutput(track: track, outputSettings: nil)
     reader.add(output)
     let writer = try AVAssetWriter(outputURL: mov, fileType: .mov)
-    let english = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: format)
-    let french = AVAssetWriterInput(mediaType: .audio, outputSettings: nil, sourceFormatHint: format)
+    let settings: [String: Any] = [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100,
+                                   AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 64_000]
+    let english = AVAssetWriterInput(mediaType: .audio, outputSettings: settings, sourceFormatHint: format)
+    let french = AVAssetWriterInput(mediaType: .audio, outputSettings: settings, sourceFormatHint: format)
     english.extendedLanguageTag = "en"; french.extendedLanguageTag = "fr"
     writer.add(english); writer.add(french)
     writer.add(AVAssetWriterInputGroup(inputs: [english, french], defaultInput: english))
@@ -93,3 +98,13 @@ func alternateAudioMedia() async throws -> URL {
     if let error = reader.error ?? writer.error { throw error }
     return mov
 }
+
+#if os(macOS)
+import AppKit
+
+@MainActor
+func vlcSurface(in view: NSView) -> VLCVideoSurfaceNSView? {
+    if let surface = view as? VLCVideoSurfaceNSView { return surface }
+    return view.subviews.lazy.compactMap { vlcSurface(in: $0) }.first
+}
+#endif

@@ -1,7 +1,7 @@
 import XCTest
 import AVFoundation
 #if os(macOS)
-import VLC
+import SwiftVLC
 #endif
 @testable import EasyIPTV
 
@@ -165,8 +165,13 @@ final class SubtitleTests: XCTestCase {
     #if os(macOS)
     @MainActor
     func testBundledVLCSupportsLiveSubtitleFontChanges() {
-        let player = VLCMediaPlayer()
-        XCTAssertTrue(player.responds(to: NSSelectorFromString("setTextRendererFontSize:")))
+        let player = SwiftVLC.Player()
+        let controller = SubtitleController()
+        let savedSize = controller.fontSize
+        defer { controller.fontSize = savedSize }
+        controller.configure(player: player, provider: { [] })
+        controller.fontSize = 36
+        XCTAssertEqual(player.subtitleTextScale, 1.5, accuracy: 0.01)
     }
     #endif
 
@@ -200,7 +205,7 @@ final class SubtitleTests: XCTestCase {
         let controller = SubtitleController()
         let movie = M3UItem(name: "Movie", streamURL: URL(string: "https://example.com/movie.mkv")!, contentType: .movie)
         controller.reset(for: movie)
-        let player = VLCMediaPlayer()
+        let player = SwiftVLC.Player()
         let url = URL(string: "https://example.com/english.srt")!
         var requests = 0
         controller.configure(player: player) {
