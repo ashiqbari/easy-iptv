@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor
 final class PlaybackControlsTests: XCTestCase {
-    func testSpaceTogglesOnceWithFocusedSliderAndHiddenControlsForBothEngines() async throws {
+    func testPlaybackKeysRespectTextEditingAndVideoFocusForBothEngines() async throws {
         _ = NSApplication.shared
         let policy = NSApp.activationPolicy()
         NSApp.setActivationPolicy(.regular)
@@ -83,6 +83,43 @@ final class PlaybackControlsTests: XCTestCase {
             send(try space())
             XCTAssertEqual(field.stringValue, "Find ")
             XCTAssertFalse(manager.isPlaying)
+            func arrow(right: Bool, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
+                let character = String(UnicodeScalar(right ? NSRightArrowFunctionKey : NSLeftArrowFunctionKey)!)
+                return try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                    context: nil, characters: character, charactersIgnoringModifiers: character,
+                    isARepeat: false, keyCode: right ? 124 : 123))
+            }
+            let position = manager.currentTime
+            send(try arrow(right: false))
+            XCTAssertEqual(editor.selectedRange.location, 4)
+            send(try arrow(right: true))
+            XCTAssertEqual(editor.selectedRange.location, 5)
+            send(try arrow(right: false, modifiers: .option))
+            XCTAssertLessThan(editor.selectedRange.location, 4)
+            XCTAssertEqual(manager.currentTime, position, accuracy: 0.1)
+
+            manager.showVideoControls = false
+            for _ in 0..<10 { hosting.layoutSubtreeIfNeeded(); try await Task.sleep(nanoseconds: 30_000_000) }
+            // shortcut: this point is empty video space; update it if the playback HUD layout changes.
+            let point = hosting.convert(NSPoint(x: 250, y: 240), to: nil)
+            let target = try XCTUnwrap(content.hitTest(content.convert(point, from: nil)))
+            let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point,
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            target.mouseDown(with: click)
+            XCTAssertTrue(window.firstResponder === target)
+            XCTAssertFalse(window.firstResponder is NSTextView)
+            XCTAssertFalse(window.firstResponder is NSTextField)
+            send(try space())
+            try await waitForPlayback(true)
+            send(try space())
+            try await waitForPlayback(false)
+            let pausedPosition = manager.currentTime
+            send(try arrow(right: true))
+            XCTAssertEqual(manager.currentTime, pausedPosition + 10, accuracy: 0.1)
+            send(try arrow(right: false))
+            XCTAssertEqual(manager.currentTime, pausedPosition, accuracy: 0.1)
             window.makeFirstResponder(slider)
             send(try space(modifiers: .shift))
             try await Task.sleep(nanoseconds: 50_000_000)

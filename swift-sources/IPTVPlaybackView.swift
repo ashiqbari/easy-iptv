@@ -162,7 +162,8 @@ final class PlaybackActivityNSView: NSView {
             manager.pointerInsidePlayer = true
             manager.notePlayerActivity()
         } else { leavePlayer() }
-        guard event.type == .keyDown, event.charactersIgnoringModifiers == " ",
+        guard event.type == .keyDown,
+              event.charactersIgnoringModifiers == " " || event.keyCode == 123 || event.keyCode == 124,
               event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
               window.attachedSheet == nil, NSApp.modalWindow == nil,
               !(window.firstResponder is NSTextView), !(window.firstResponder is NSTextField),
@@ -170,7 +171,9 @@ final class PlaybackActivityNSView: NSView {
               !manager.showingDashboard, !manager.showingDownloads,
               !manager.isViewingMovieDetails, !manager.isViewingSeriesDetails,
               manager.currentChannel != nil, manager.resumeRequest == nil else { return false }
-        if !event.isARepeat { manager.togglePlayPause() }
+        if event.keyCode == 123 { manager.seekBy(seconds: -10) }
+        else if event.keyCode == 124 { manager.seekBy(seconds: 10) }
+        else if !event.isARepeat { manager.togglePlayPause() }
         return true
     }
 
@@ -227,7 +230,9 @@ private final class PlaybackVideoClickNSView: NSView {
     private weak var manager: IPTVPlayerManager?
     init(manager: IPTVPlayerManager) { self.manager = manager; super.init(frame: .zero) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var acceptsFirstResponder: Bool { true }
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         if event.clickCount == 2, let window { manager?.toggleFullscreen(in: window) }
         else if event.clickCount == 1 { manager?.toggleVideoControls() }
     }
@@ -362,10 +367,6 @@ public struct IPTVPlaybackView: View {
             HStack(spacing: 0) {
                 Button("") { manager.toggleFullscreen() }
                     .keyboardShortcut("f", modifiers: [])
-                Button("") { manager.seekBy(seconds: -10) }
-                    .keyboardShortcut(.leftArrow, modifiers: [])
-                Button("") { manager.seekBy(seconds: 10) }
-                    .keyboardShortcut(.rightArrow, modifiers: [])
                 Button("") { showingPlaybackDiagnostics.toggle() }
                     .keyboardShortcut("i", modifiers: [.command, .shift])
             }
