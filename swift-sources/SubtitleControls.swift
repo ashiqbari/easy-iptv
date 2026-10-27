@@ -29,12 +29,17 @@ struct SubtitleOverlay: View {
     }
 }
 
-/// A popover allows loading/error state and live font controls to update while open.
+struct SubtitleButtonAnchor: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+/// The button opens a panel contained by the player.
 struct SubtitleControls: View {
     @ObservedObject var manager: IPTVPlayerManager
     @ObservedObject var controller: SubtitleController
-    @State private var importingFile = false
-    @State private var importMediaKey: String?
 
     var body: some View {
         Button {
@@ -60,11 +65,47 @@ struct SubtitleControls: View {
         .accessibilityValue(controller.selectedID == nil ? "Off" : "On")
         .help("Choose subtitles, timing, and text size (Command–Shift–C)")
         .keyboardShortcut("c", modifiers: [.command, .shift])
-        .popover(isPresented: $controller.showingMenu, arrowEdge: .bottom) {
-            SubtitleMenuView(controller: controller) {
-                importMediaKey = manager.currentChannel?.subtitleCacheKey
-                importingFile = true
-                manager.cancelControlsAutoHide()
+        .anchorPreference(key: SubtitleButtonAnchor.self, value: .bounds) { $0 }
+    }
+}
+
+struct SubtitleDialog: View {
+    var buttonAnchor: Anchor<CGRect>? = nil
+    @ObservedObject var manager: IPTVPlayerManager
+    @ObservedObject var controller: SubtitleController
+    @State private var importingFile = false
+    @State private var importMediaKey: String?
+
+    var body: some View {
+        GeometryReader { geometry in
+            if controller.showingMenu {
+                let button = buttonAnchor.map { geometry[$0] }
+                    ?? CGRect(x: geometry.size.width - 172, y: geometry.size.height - 44, width: 0, height: 0)
+                let width = min(320, max(1, geometry.size.width - 24))
+                let height = max(1, min(geometry.size.height - 24, button.minY - 20))
+                let left = max(12, min(button.midX - width / 2, geometry.size.width - width - 12))
+                ZStack(alignment: .topLeading) {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { controller.showingMenu = false }
+                        .accessibilityHidden(true)
+                    SubtitleMenuView(controller: controller,
+                                     availableWidth: width,
+                                     availableHeight: height) {
+                        importMediaKey = manager.currentChannel?.subtitleCacheKey
+                        importingFile = true
+                        manager.cancelControlsAutoHide()
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.primary.opacity(0.15), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.3), radius: 16, y: 6)
+                    .frame(width: width, height: height, alignment: .bottom)
+                    .offset(x: left, y: 12)
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
             }
         }
         #if os(macOS)
@@ -94,10 +135,16 @@ struct SubtitleControls: View {
     }
 }
 
-/// The presentation owns its observation. Updates must not depend on rebuilding
-/// the CC button's parent when asynchronous track discovery completes.
+/// Track discovery updates the panel independently of the playback controls.
 struct SubtitleMenuView: View {
+    @State private var showingPreferences = false
+    @State private var showingLanguages = false
+    @State private var contentHeight: CGFloat = 220
+    @Environment(\.appPalette) private var palette
+    @AppStorage(LanguagePreference.subtitleKey) private var preferredLanguage = ""
     @ObservedObject var controller: SubtitleController
+    var availableWidth: CGFloat = 320
+    var availableHeight: CGFloat = 440
     let onImport: () -> Void
 
     var body: some View {
@@ -105,10 +152,14 @@ struct SubtitleMenuView: View {
             content
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.size.height
+                } action: { height in
+                    contentHeight = height
+                }
         }
-        // A popover needs concrete bounds. A flexible empty ScrollView combined
-        // with idealWidth/fixedSize can collapse its hosted content after loading.
-        .frame(width: 320, height: 440)
+        // Keep concrete scroll bounds while fitting the visible controls.
+        .frame(width: min(320, availableWidth), height: min(440, availableHeight, contentHeight))
         .labelStyle(.titleAndIcon)
         .foregroundStyle(.primary)
         .background(.regularMaterial)
@@ -120,24 +171,86 @@ struct SubtitleMenuView: View {
                 Label("Subtitles", systemImage: "captions.bubble")
                     .font(.headline)
                 Spacer()
+                Button { showingPreferences.toggle() } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(showingPreferences ? palette.accent : .primary)
+                .accessibilityLabel("Subtitle preferences")
+                .help("Subtitle preferences")
+                .accessibilityValue(showingPreferences ? "Expanded" : "Collapsed")
                 Button("Done") { controller.showingMenu = false }
                     .keyboardShortcut(.cancelAction)
             }
 
-            trackButton("Off", id: nil)
+            VStack(spacing: 0) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { showingLanguages.toggle() }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "captions.bubble")
+                            .foregroundStyle(palette.accent)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Subtitle language").font(.subheadline.weight(.semibold))
+                            Text(controller.tracks.first { $0.id == controller.selectedID }?.label ?? "Off")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            if controller.isLoadingTracks {
+                                Text("Loading subtitle languages…")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            } else if controller.tracks.isEmpty {
+                                Text(controller.errorMessage == nil ? "No subtitle languages available" : "Subtitle languages unavailable")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 4)
+                        if !controller.tracks.isEmpty {
+                            Text("\(controller.tracks.count) available")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(palette.accent)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(palette.accent.opacity(0.12), in: Capsule())
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .rotationEffect(.degrees(showingLanguages ? 90 : 0))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(controller.tracks.isEmpty)
+                .accessibilityLabel("Subtitle language")
+                .accessibilityValue("\(controller.tracks.first { $0.id == controller.selectedID }?.label ?? "Off"), \(controller.tracks.count) available, \(showingLanguages ? "Expanded" : "Collapsed")")
+                .accessibilityHint("Show or hide subtitle tracks")
+                .help("Show or hide subtitle tracks")
 
-            if controller.isLoadingTracks {
-                HStack { ProgressView().controlSize(.small); Text("Loading subtitles…") }
-            } else if controller.tracks.isEmpty && controller.errorMessage == nil {
-                Text("No subtitles available").foregroundStyle(.secondary)
-            }
-
-            if !controller.tracks.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(controller.tracks) { track in
-                        trackButton(track.label, id: track.id)
+                if showingLanguages && !controller.tracks.isEmpty {
+                    Divider().padding(.horizontal, 12)
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                trackButton("Off", id: nil).id("off")
+                                ForEach(controller.tracks) { track in
+                                    trackButton(track.label, id: track.id).id(track.id)
+                                }
+                            }
+                            .padding(10)
+                        }
+                        .frame(height: min(180, CGFloat(controller.tracks.count + 1) * 48 + 20))
+                        .onAppear { proxy.scrollTo(controller.selectedID ?? "off", anchor: .center) }
                     }
                 }
+            }
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
             }
 
             if controller.isLoadingFile {
@@ -150,6 +263,23 @@ struct SubtitleMenuView: View {
             }
 
             Divider()
+            Button("Load subtitle file…", action: onImport)
+                .help("Open an SRT or WebVTT subtitle file for this movie or episode")
+
+            subtitleTiming
+
+            if showingPreferences {
+                Divider()
+                LanguagePreferencePicker(title: "Preferred language", defaultLabel: "Off", selection: $preferredLanguage)
+                Text("Applies to new movie and episode playback; unavailable languages leave subtitles off.").font(.caption).foregroundStyle(.secondary)
+                fontPreferences
+            }
+        }
+    }
+
+    private var subtitleTiming: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
             VStack(alignment: .leading, spacing: 8) {
                 Text("Subtitle timing").font(.headline)
                 Text(controller.timingDelay == 0 ? "No adjustment" :
@@ -157,10 +287,14 @@ struct SubtitleMenuView: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                 HStack {
-                    Button("Earlier") { controller.setTimingDelay(controller.timingDelay - 0.5) }
+                    Button { controller.setTimingDelay(controller.timingDelay - 0.5) } label: {
+                        VStack(spacing: 2) { Text("−0.5s"); Text("Earlier").font(.caption) }
+                    }
                         .disabled(controller.timingDelay <= -60)
                         .accessibilityLabel("Show subtitles half a second earlier")
-                    Button("Later") { controller.setTimingDelay(controller.timingDelay + 0.5) }
+                    Button { controller.setTimingDelay(controller.timingDelay + 0.5) } label: {
+                        VStack(spacing: 2) { Text("+0.5s"); Text("Later").font(.caption) }
+                    }
                         .disabled(controller.timingDelay >= 60)
                         .accessibilityLabel("Show subtitles half a second later")
                     Spacer()
@@ -177,6 +311,11 @@ struct SubtitleMenuView: View {
                 }
             }
 
+        }
+    }
+
+    private var fontPreferences: some View {
+        VStack(alignment: .leading, spacing: 12) {
             Divider()
             HStack {
                 Text("Font size")
@@ -193,9 +332,6 @@ struct SubtitleMenuView: View {
                 }
             }
 
-            Divider()
-            Button("Load subtitle file…", action: onImport)
-            .help("Open an SRT or WebVTT subtitle file for this movie or episode")
         }
     }
 
@@ -206,7 +342,10 @@ struct SubtitleMenuView: View {
                 Spacer()
                 if controller.selectedID == id { Image(systemName: "checkmark") }
             }
-            .frame(maxWidth: .infinity, minHeight: 36)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(controller.selectedID == id ? palette.accent.opacity(0.12) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 6))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

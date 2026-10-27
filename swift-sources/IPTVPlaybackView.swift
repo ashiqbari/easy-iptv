@@ -341,6 +341,10 @@ public struct IPTVPlaybackView: View {
                 seriesHeroView.background(palette.background)
             }
         }
+        .overlayPreferenceValue(SubtitleButtonAnchor.self) { anchor in
+            SubtitleDialog(buttonAnchor: anchor, manager: manager, controller: manager.subtitles)
+                .allowsHitTesting(manager.subtitles.showingMenu)
+        }
         .sheet(isPresented: $manager.showingEPGSheet) {
             if let channel = manager.currentChannel {
                 NativeEPGSheetView(channel: channel, manager: manager)

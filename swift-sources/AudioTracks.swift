@@ -14,6 +14,14 @@ struct AudioTrack: Identifiable {
     let id: String
     let name: String
     let source: Source
+    var language: String? {
+        switch source {
+        case .av(let option): return option.extendedLanguageTag ?? option.locale?.identifier
+        #if os(macOS)
+        case .vlc(let track): return track.language
+        #endif
+        }
+    }
 }
 
 @MainActor
@@ -23,6 +31,10 @@ final class AudioTrackController: ObservableObject {
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     @Published var showingMenu = false
+    private let defaults: UserDefaults
+    private var selectionMade = false
+    private var preferredLanguage = ""
+    init(defaults: UserDefaults = .standard) { self.defaults = defaults }
     private weak var item: AVPlayerItem?
     private var group: AVMediaSelectionGroup?
     private var discovery: Task<Void, Never>?
@@ -41,6 +53,14 @@ final class AudioTrackController: ObservableObject {
         refresh()
     }
 
+    private func applyPreferredSelection() {
+        guard !selectionMade, selectionToRestore == nil,
+              let track = tracks.first(where: {
+                  LanguagePreference.matches(preferredLanguage, language: $0.language, label: $0.name)
+              }) else { return }
+        select(track.id)
+    }
+
     private func applyRestoredSelection() {
         guard let selection = selectionToRestore,
               let track = tracks.first(where: { $0.id == selection.id && $0.name == selection.name })
@@ -50,15 +70,26 @@ final class AudioTrackController: ObservableObject {
 
     func reset() {
         selectionToRestore = nil
+        selectionMade = false
+        preferredLanguage = defaults.string(forKey: LanguagePreference.audioKey) ?? ""
         discovery?.cancel(); discovery = nil
         item = nil; group = nil; tracks = []; selectedID = nil; loading = false; error = nil; showingMenu = false
         #if os(macOS)
         player = nil
         #endif
     }
-    func configure(_ item: AVPlayerItem) { reset(); self.item = item }
+    func configure(_ item: AVPlayerItem, applyLanguagePreference: Bool = true) {
+        reset()
+        if !applyLanguagePreference { preferredLanguage = "" }
+        self.item = item
+        refresh()
+    }
     #if os(macOS)
-    func configure(_ player: SwiftVLC.Player) { reset(); self.player = player }
+    func configure(_ player: SwiftVLC.Player, applyLanguagePreference: Bool = true) {
+        reset()
+        if !applyLanguagePreference { preferredLanguage = "" }
+        self.player = player
+    }
     #endif
     func refresh() {
         #if os(macOS)
@@ -68,6 +99,7 @@ final class AudioTrackController: ObservableObject {
             }
             selectedID = player.selectedAudioTrack.map { "vlc:\($0.id)" }
             applyRestoredSelection()
+            applyPreferredSelection()
             return
         }
         #endif
@@ -88,6 +120,7 @@ final class AudioTrackController: ObservableObject {
                 }?.id
                 self.loading = false
                 self.applyRestoredSelection()
+                self.applyPreferredSelection()
             } catch {
                 guard !Task.isCancelled, let self, self.item === item else { return }
                 self.loading = false; self.error = "Audio tracks couldn't be loaded. Try again after playback starts."
@@ -97,6 +130,7 @@ final class AudioTrackController: ObservableObject {
     func select(_ id: String) {
         guard let track = tracks.first(where: { $0.id == id }) else { return }
         selectionToRestore = nil
+        selectionMade = true
         switch track.source {
         case .av(let option):
             guard let item, let group else { return }
@@ -143,12 +177,31 @@ struct AudioTrackControl: View {
 }
 
 private struct AudioTrackMenu: View {
+    @State private var showingPreferences = false
+    @AppStorage(LanguagePreference.audioKey) private var preferredLanguage = ""
     @Environment(\.appPalette) private var palette
     @ObservedObject var controller: AudioTrackController
     var body: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Audio Tracks").font(.headline)
+            HStack {
+                Text("Audio Tracks").font(.headline)
+                Spacer()
+                Button { showingPreferences.toggle() } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(showingPreferences ? palette.accent : .primary)
+                .accessibilityLabel("Audio preferences")
+                .help("Audio preferences")
+                .accessibilityValue(showingPreferences ? "Expanded" : "Collapsed")
+            }
+            if showingPreferences {
+                LanguagePreferencePicker(title: "Preferred language", defaultLabel: "Stream default", selection: $preferredLanguage)
+                Text("Applies to movies and episodes only. Unavailable languages use the stream default.").font(.caption).foregroundStyle(.secondary)
+                Divider()
+            }
             if controller.loading { ProgressView("Loading tracks…") }
             if let error = controller.error { Text(error).font(.caption) }
             if controller.tracks.isEmpty, !controller.loading { Text("No selectable audio tracks yet.").foregroundStyle(.secondary) }
@@ -160,7 +213,7 @@ private struct AudioTrackMenu: View {
             Button("Refresh tracks") { controller.refresh() }
         }.padding(18)
         }
-        .frame(width: 320, height: min(480, CGFloat(max(1, controller.tracks.count)) * 38 + 120))
+        .frame(width: 320, height: min(480, CGFloat(max(1, controller.tracks.count)) * 38 + (showingPreferences ? 240 : 150)))
         .background(palette.surface)
     }
 }

@@ -1223,7 +1223,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             AVURLAssetPreferPreciseDurationAndTimingKey: false
         ])
         let playerItem = AVPlayerItem(asset: asset)
-        audioTracks.configure(playerItem)
+        audioTracks.configure(playerItem, applyLanguagePreference: item.contentType != .live)
         if item.isVOD {
             subtitles.configure(item: playerItem, provider: subtitleProvider(for: item), offlineSources: localURL == nil ? nil : (downloads.record(for: item)?.subtitles ?? []))
         }
@@ -1289,7 +1289,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
         surface.layoutSubtreeIfNeeded()
         vlcVideoSurface = surface
         vlcPlayer = vlc
-        audioTracks.configure(vlc)
+        audioTracks.configure(vlc, applyLanguagePreference: item.contentType != .live)
         if item.isVOD {
             subtitles.configure(player: vlc, provider: subtitleProvider(for: item), offlineSources: localURL == nil ? nil : (downloads.record(for: item)?.subtitles ?? []))
         }
@@ -2437,7 +2437,7 @@ extension IPTVPlayerManager {
             applyPendingVLCResume(player)
         case .tracksChanged:
             audioTracks.refresh()
-            subtitles.loadTracksIfNeeded()
+            subtitles.nativeTracksDidChange()
         default: break
         }
     }

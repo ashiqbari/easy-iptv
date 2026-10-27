@@ -16,6 +16,15 @@ struct SubtitleTrack: Identifiable {
     let id: String
     let label: String
     let source: Source
+    var language: String? {
+        switch source {
+        case .av(let option): return option.extendedLanguageTag ?? option.locale?.identifier
+        case .file: return nil
+        #if os(macOS)
+        case .vlc(let track): return track.language
+        #endif
+        }
+    }
 }
 
 @MainActor
@@ -39,6 +48,14 @@ final class SubtitleController: NSObject, ObservableObject {
             UserDefaults.standard.set(fontSize, forKey: "com.iptvplayer.subtitleFontSize")
             applyNativeFontSize()
         }
+    }
+
+    private let defaults: UserDefaults
+    private var selectionMade = false
+    private var preferredLanguage = ""
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        super.init()
     }
 
     private var mediaKey: String?
@@ -89,6 +106,7 @@ final class SubtitleController: NSObject, ObservableObject {
     }
 
     func restoreSelection(_ selection: PlaybackSelection) {
+        selectionMade = selection.track == nil
         selectionToRestore = selection.track
         appendTracks(selection.files.map { SubtitleTrack(id: $0.id, label: $0.label, source: .file($0)) })
     }
@@ -105,6 +123,9 @@ final class SubtitleController: NSObject, ObservableObject {
     }
 
     func reset(for item: M3UItem?) {
+        selectionMade = false
+        preferredLanguage = item != nil && item?.contentType != .live
+            ? defaults.string(forKey: LanguagePreference.subtitleKey) ?? "" : ""
         requestedID = nil
         selectionToRestore = nil
         generation = UUID()
@@ -175,6 +196,11 @@ final class SubtitleController: NSObject, ObservableObject {
     func configure(player: SwiftVLC.Player, provider: @escaping () async throws -> [SubtitleSource], offlineSources: [SubtitleSource]? = nil) {
         vlcPlayer = player
         prepareProvider(provider, offlineSources: offlineSources)
+        loadTracksIfNeeded()
+    }
+
+    func nativeTracksDidChange() {
+        nativeTracksLoaded = false
         loadTracksIfNeeded()
     }
 
@@ -282,6 +308,12 @@ final class SubtitleController: NSObject, ObservableObject {
         var ids = Set(tracks.map(\.id))
         tracks += available.filter { ids.insert($0.id).inserted }
         applyRestoredSelection()
+        if !selectionMade, selectionToRestore == nil,
+           let track = tracks.first(where: {
+               LanguagePreference.matches(preferredLanguage, language: $0.language, label: $0.label)
+           }) {
+            select(track.id)
+        }
     }
 
     private func refreshDiscoveryState() {
@@ -290,6 +322,7 @@ final class SubtitleController: NSObject, ObservableObject {
     }
 
     func select(_ id: String?) {
+        selectionMade = true
         selectionToRestore = nil
         requestedID = id
         selection = UUID()

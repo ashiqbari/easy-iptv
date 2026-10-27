@@ -55,6 +55,7 @@ let package = Package(
                 "SavedSources.swift",
                 "ChannelOrganization.swift",
                 "AudioTracks.swift",
+                "LanguagePreference.swift",
                 "CatchupTV.swift",
                 "IPTVPlayerApp.swift"
             ],
