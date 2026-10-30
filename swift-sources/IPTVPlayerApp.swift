@@ -119,6 +119,53 @@ struct AppearancePicker: View {
 #if os(macOS)
 import AppKit
 
+struct WindowHeaderBehavior: NSViewRepresentable {
+    func makeNSView(context: Context) -> WindowHeaderNSView { WindowHeaderNSView() }
+    func updateNSView(_ view: WindowHeaderNSView, context: Context) { }
+    static func dismantleNSView(_ view: WindowHeaderNSView, coordinator: ()) { view.stopTracking() }
+}
+
+final class WindowHeaderNSView: NSView {
+    private var monitor: Any?
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopTracking()
+        guard window != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            self?.handle(event) == true ? nil : event
+        }
+    }
+
+    func stopTracking() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    func handle(_ event: NSEvent) -> Bool {
+        guard event.type == .leftMouseDown, event.clickCount == 2,
+              let window, event.window === window, window.styleMask.contains(.resizable),
+              !window.styleMask.contains(.fullScreen), window.attachedSheet == nil,
+              event.locationInWindow.y >= window.contentLayoutRect.maxY else { return false }
+        // SwiftUI content can cover the hidden title bar; leave its controls alone.
+        for item in window.toolbar?.items ?? [] {
+            if let view = item.view, view.convert(view.bounds, to: nil).contains(event.locationInWindow) { return false }
+        }
+        var hit = window.contentView?.superview?.hitTest(event.locationInWindow)
+        while let view = hit {
+            if view is NSControl || !view.mouseDownCanMoveWindow { return false }
+            hit = view.superview
+        }
+        switch UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") {
+        case "None": break
+        case "Minimize": window.performMiniaturize(nil)
+        default: window.performZoom(nil)
+        }
+        return true
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var manager: IPTVPlayerManager?

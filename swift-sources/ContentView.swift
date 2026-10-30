@@ -132,6 +132,9 @@ public struct ContentView: View {
             }
         }
 
+        #if os(macOS)
+        .background { WindowHeaderBehavior() }
+        #endif
         .sheet(isPresented: $manager.showingSources) {
             SavedSourcesView(manager: manager, store: manager.sources)
         }
