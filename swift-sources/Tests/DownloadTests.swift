@@ -137,6 +137,44 @@ final class DownloadTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(server.count("/live.mov"), 3)
     }
 
+    func testPrematureNetworkEndReconnectsBothEnginesAndGenuineEndCompletes() async throws {
+        let media = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: media) }
+        let server = try DownloadHTTPFixture()
+        server.media = try Data(contentsOf: media)
+        server.acceptsRanges = true
+        try await server.start()
+        server.release("/resume.mov")
+        defer { server.stop() }
+        for useVLC in [false, true] {
+            let manager = IPTVPlayerManager(progressDefaults: UserDefaults(suiteName: "early-end-\(UUID())")!)
+            defer { manager.stop() }
+            let item = M3UItem(name: "Resume fixture", streamURL: server.url("/resume.mov"), contentType: useVLC ? .series : .movie)
+            if useVLC { manager.playDirectStream(item) } else { manager.playAVKitFixture(item) }
+            try await wait { manager.isPlaying && manager.duration > 0 }
+            manager.seek(to: 80)
+            try await wait { manager.currentTime >= 79 }
+            let oldAV = manager.player, oldVLC = manager.vlcPlayer
+            if useVLC {
+                oldVLC?.stop()
+                try await wait { oldVLC?.state == .stopped }
+                manager.playbackDidEnd()
+            } else {
+                oldAV?.pause()
+                NotificationCenter.default.post(name: .AVPlayerItemDidPlayToEndTime, object: oldAV?.currentItem)
+            }
+            try await wait {
+                let replaced = useVLC ? manager.vlcPlayer !== oldVLC : manager.player !== oldAV
+                return replaced && manager.isPlaying && manager.currentTime >= 79
+            }
+            XCTAssertFalse(manager.progressStore.progress(for: item)?.completed ?? true)
+            XCTAssertNil(manager.errorMessage)
+            manager.seek(to: 299)
+            try await wait { manager.progressStore.progress(for: item)?.completed == true && !manager.isPlaying }
+            XCTAssertFalse(manager.isWaitingToReconnect)
+        }
+    }
+
     func testVLCMovieAndEpisodeRecoverAfterNetworkSeek() async throws {
         let media = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: media) }

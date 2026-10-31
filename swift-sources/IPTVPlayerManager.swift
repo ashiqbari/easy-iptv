@@ -1415,7 +1415,10 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     }
 
     private func playbackPosition() -> Double {
-        pausedPlaybackPosition ?? enginePlaybackPosition()
+        if let pausedPlaybackPosition { return pausedPlaybackPosition }
+        let position = enginePlaybackPosition()
+        // SwiftVLC resets its clock on stop, before the queued end/error reaches us.
+        return position == 0 && currentChannel?.isVOD == true ? currentTime : position
     }
 
     private func enginePlaybackPosition() -> Double {
@@ -1727,6 +1730,14 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             pauseForBackground()
             return
         }
+        #if os(macOS)
+        if useVLCPlayback, let vlcPlayer, !vlcPlayer.isActive, vlcPlayer.state != .paused,
+           let position = pausedPlaybackPosition, let channel = currentChannel, channel.isVOD {
+            playDirectStream(channel, useVLC: true, position: position,
+                             preservingDetails: isViewingMovieDetails || isViewingSeriesDetails)
+            return
+        }
+        #endif
         cancelStreamRecovery()
         wantsPlayback = true
         playbackFinished = false
@@ -2180,6 +2191,28 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     // MARK: - Private Observers & Helpers
     
+    func playbackDidEnd() {
+        guard wantsPlayback, recoveryTask == nil, let channel = currentChannel else { return }
+        if !channel.isVOD { recoverStream(); return }
+        let position = pendingResumePosition ?? playbackPosition()
+        let networkVOD = ["http", "https"].contains(channel.streamURL.scheme?.lowercased() ?? "")
+            && downloads.localURL(for: channel) == nil
+        // Buffered playback can advance after a long pause before the expired connection ends.
+        if networkVOD && (pendingResumePosition != nil || (duration > 0 && position < duration - 2)
+            || (resumePlaybackTask != nil && enginePlaybackPosition() <= (pausedPlaybackPosition ?? 0) + 0.1)) {
+            pausedPlaybackPosition = position
+            saveProgress(force: true)
+            recoverStream()
+            return
+        }
+        pausedPlaybackPosition = nil
+        cancelStreamRecovery()
+        saveProgress(force: true, completed: true)
+        playbackFinished = true
+        wantsPlayback = false
+        isPlaying = false
+    }
+
     private func observePlayerItem(_ playerItem: AVPlayerItem) {
         playerItemStatusObserver?.invalidate()
         playerTimeControlObserver?.invalidate()
@@ -2189,18 +2222,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             Task { @MainActor [weak self] in
                 guard let self, self.player?.currentItem === playerItem, !self.useVLCPlayback,
                       self.wantsPlayback else { return }
-                if self.currentChannel?.contentType == .live { self.recoverStream(); return }
-                if self.resumePlaybackTask != nil,
-                   self.enginePlaybackPosition() <= (self.pausedPlaybackPosition ?? 0) + 0.1 {
-                    self.recoverStream()
-                    return
-                }
-                self.pausedPlaybackPosition = nil
-                self.cancelStreamRecovery()
-                self.saveProgress(force: true, completed: true)
-                self.playbackFinished = true
-                self.wantsPlayback = false
-                self.isPlaying = false
+                self.playbackDidEnd()
             }
         }
         
@@ -2415,19 +2437,7 @@ extension IPTVPlayerManager {
                 audioTracks.refresh()
             }
         case .endReached:
-            guard wantsPlayback else { return }
-            if currentChannel?.isVOD == false { recoverStream(); return }
-            if resumePlaybackTask != nil,
-               enginePlaybackPosition() <= (pausedPlaybackPosition ?? 0) + 0.1 {
-                recoverStream()
-                return
-            }
-            pausedPlaybackPosition = nil
-            cancelStreamRecovery()
-            saveProgress(force: true, completed: true)
-            playbackFinished = true
-            wantsPlayback = false
-            isPlaying = false
+            playbackDidEnd()
         case .timeChanged(let time):
             guard !isSeeking else { return }
             updatePlaybackClock(position: time.secondsValue, duration: player.duration?.secondsValue ?? 0)

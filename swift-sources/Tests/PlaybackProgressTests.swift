@@ -554,6 +554,62 @@ final class PlaybackProgressTests: XCTestCase {
         XCTAssertTrue(manager.player === player)
     }
 
+    #if os(macOS)
+    @MainActor func testStoppedPausedVLCResumesAtBookmarkInsteadOfStartingOver() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        manager.playDirectStream(media(url: url))
+        let player = try XCTUnwrap(manager.vlcPlayer)
+        let ready = await waitUntil { player.isSeekable }
+        XCTAssertTrue(ready)
+        manager.seek(to: 80)
+        let sought = await waitUntil { player.currentTime.secondsValue >= 79 }
+        XCTAssertTrue(sought)
+        manager.pauseForBackground()
+        player.stop()
+        let stopped = await waitUntil { player.state == .stopped }
+        XCTAssertTrue(stopped)
+        manager.togglePlayPause()
+        XCTAssertTrue(manager.vlcPlayer !== player)
+        let resumed = await waitUntil { manager.isPlaying && (manager.vlcPlayer?.currentTime.secondsValue ?? 0) >= 79 }
+        XCTAssertTrue(resumed)
+    }
+
+    @MainActor func testPrematureEndAfterResumeKeepsMovieAndEpisodeBookmark() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        for type in [M3UItem.ContentType.movie, .series] {
+            let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+            defer { manager.stop() }
+            manager.playDirectStream(media(url: url, type: type))
+            let player = try XCTUnwrap(manager.vlcPlayer)
+            let ready = await waitUntil { player.isSeekable && manager.duration > 0 }
+            XCTAssertTrue(ready)
+            manager.seek(to: 80)
+            let sought = await waitUntil { player.currentTime.secondsValue >= 79 }
+            XCTAssertTrue(sought)
+            let remote = media(type: type)
+            manager.currentChannel = remote
+            manager.pauseForBackground()
+            manager.togglePlayPause()
+            try await Task.sleep(nanoseconds: 5_400_000_000)
+            let position = manager.currentTime
+            XCTAssertGreaterThan(position, 80)
+            // An expired connection can drain buffered data, then end and reset its clock.
+            player.stop()
+            let stopped = await waitUntil { player.state == .stopped }
+            XCTAssertTrue(stopped)
+            manager.playbackDidEnd()
+            XCTAssertTrue(manager.isWaitingToReconnect)
+            XCTAssertFalse(manager.progressStore.progress(for: remote)?.completed ?? true)
+            manager.pauseForBackground()
+            XCTAssertEqual(manager.progressStore.progress(for: remote)?.position ?? 0, position, accuracy: 2)
+        }
+    }
+    #endif
+
     @MainActor func testPeriodicSaveAndCompletionSurviveExit() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
