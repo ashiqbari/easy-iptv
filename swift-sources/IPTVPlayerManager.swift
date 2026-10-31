@@ -1730,6 +1730,11 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
             pauseForBackground()
             return
         }
+        if playbackFinished, let channel = currentChannel {
+            playDirectStream(channel, useVLC: useVLCPlayback,
+                             preservingDetails: isViewingMovieDetails || isViewingSeriesDetails)
+            return
+        }
         #if os(macOS)
         if useVLCPlayback, let vlcPlayer, !vlcPlayer.isActive, vlcPlayer.state != .paused,
            let position = pausedPlaybackPosition, let channel = currentChannel, channel.isVOD {
@@ -2193,7 +2198,7 @@ public final class IPTVPlayerManager: NSObject, ObservableObject {
     
     func playbackDidEnd() {
         guard wantsPlayback, recoveryTask == nil, let channel = currentChannel else { return }
-        if !channel.isVOD { recoverStream(); return }
+        if channel.contentType == .live || !channel.isVOD { recoverStream(); return }
         let position = pendingResumePosition ?? playbackPosition()
         let networkVOD = ["http", "https"].contains(channel.streamURL.scheme?.lowercased() ?? "")
             && downloads.localURL(for: channel) == nil

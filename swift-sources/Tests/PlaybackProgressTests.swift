@@ -555,6 +555,36 @@ final class PlaybackProgressTests: XCTestCase {
     }
 
     #if os(macOS)
+    @MainActor func testLiveMP4EndStillReconnectsInsteadOfCompleting() {
+        let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+        defer { manager.stop() }
+        let item = media(url: URL(string: "https://provider.example/live/channel.mp4")!, type: .live)
+        manager.playAVKitFixture(item)
+        manager.updatePlaybackClock(position: 299, duration: 300)
+        manager.playbackDidEnd()
+        XCTAssertTrue(manager.isWaitingToReconnect)
+    }
+
+    @MainActor func testReplayThenImmediatePauseDoesNotRestoreFinishedPosition() async throws {
+        let url = try await silentMedia()
+        defer { try? FileManager.default.removeItem(at: url) }
+        for useVLC in [false, true] {
+            let manager = IPTVPlayerManager(progressDefaults: isolatedDefaults())
+            defer { manager.stop() }
+            let item = media(url: url)
+            if useVLC { manager.playDirectStream(item) } else { manager.playAVKitFixture(item) }
+            let ready = await waitUntil { manager.isPlaying && manager.duration > 0 }
+            XCTAssertTrue(ready)
+            manager.seek(to: 299)
+            let ended = await waitUntil { manager.progressStore.progress(for: item)?.completed == true && !manager.isPlaying }
+            XCTAssertTrue(ended)
+            manager.togglePlayPause()
+            manager.pauseForBackground()
+            XCTAssertLessThan(manager.progressStore.progress(for: item)?.position ?? 300, 2)
+            XCTAssertFalse(manager.progressStore.progress(for: item)?.completed ?? true)
+        }
+    }
+
     @MainActor func testStoppedPausedVLCResumesAtBookmarkInsteadOfStartingOver() async throws {
         let url = try await silentMedia()
         defer { try? FileManager.default.removeItem(at: url) }
